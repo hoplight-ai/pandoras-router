@@ -1,0 +1,14 @@
+{
+  "name": "pandoras-router",
+  "version": "0.1.0",
+  "description": "A dispatcher and inspector for running many AI coding agents in parallel on one codebase: it proves declared file scopes disjoint before two agents run side by side, holds visible locks, derives collision-proof output filenames, and independently verifies an agent's claim that it finished.",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "bin": { "pandoras-router": "src/bin/router.mjs" },
+  "files": ["src", "hooks", "examples", "LICENSE", "CODE_OF_CONDUCT.md"],
+  "scripts": {
+    "test": "node test/run.mjs"
+  },
+  "keywords": ["agents", "orchestration", "concurrency", "git-worktree", "verification", "ci"]
+}

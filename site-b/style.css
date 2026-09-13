@@ -1,0 +1,247 @@
+/* Pandora's Router, variant B: the switchboard.
+   Brand navy ground, one gold path across, every refusal hanging below it. */
+
+:root {
+  --ink: #0A1628;
+  --gold: #E8A838;
+  --gold-deep: #B8851F;
+  --paper: #F7F5F0;
+  --stone: #8B8578;
+  --signal: #4A6FA5;
+  --flag: #B84A3E;
+
+  /* proposals, not in BRAND.md: one surface step and two text tiers on the dark ground */
+  --raise: #13233C;
+  --sunk: #071020;
+  --text-2: rgba(247, 245, 240, .66);
+  --text-3: rgba(247, 245, 240, .44);
+  --rule: rgba(247, 245, 240, .16);
+  --rule-soft: rgba(247, 245, 240, .09);
+  --flag-lift: #D9705F;
+
+  --sans: 'GT America', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --mono: 'GT America Mono', 'SF Mono', 'Fira Code', ui-monospace, monospace;
+
+  --measure: 66ch;
+  --gutter: clamp(20px, 4vw, 56px);
+  --shell: 1280px;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.7;
+  font-variant-numeric: lining-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+.shell { max-width: var(--shell); margin: 0 auto; padding: 0 var(--gutter); }
+
+a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--rule); }
+a:hover { border-bottom-color: var(--gold); }
+a:focus-visible, .button:focus-visible, .skip:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.skip { position: absolute; left: -9999px; top: 0; background: var(--paper); color: var(--ink); padding: 10px 16px; border: 0; z-index: 20; }
+.skip:focus { left: 12px; top: 12px; }
+
+/* masthead ---------------------------------------------------------- */
+
+.top { border-bottom: 1px solid var(--rule-soft); }
+.top .shell {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 28px;
+  padding-top: 20px; padding-bottom: 18px;
+}
+.mark { font-weight: 500; letter-spacing: -.01em; border: 0; margin-right: auto; }
+.top nav { display: flex; gap: 24px; font-size: 15.5px; }
+.top nav a { border: 0; color: var(--text-2); padding: 6px 0; }
+.top nav a:hover { color: var(--paper); }
+.top nav a[aria-current="page"] { color: var(--paper); box-shadow: inset 0 -1px 0 var(--rule); }
+
+/* hero --------------------------------------------------------------- */
+
+.hero { padding-block: clamp(36px, 4.4vw, 56px) clamp(24px, 3vw, 34px); }
+
+h1 {
+  font-size: clamp(34px, 1.2rem + 2.5vw, 54px);
+  line-height: 1.05;
+  font-weight: 500;
+  letter-spacing: -.024em;
+  margin: 0 0 20px;
+  max-width: 16ch;
+  text-wrap: balance;
+}
+
+.lede {
+  font-size: clamp(18px, 1rem + .4vw, 21px);
+  line-height: 1.55;
+  color: var(--text-2);
+  max-width: 64ch;
+  margin: 0 0 26px;
+}
+
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 28px; margin: 0; }
+.button {
+  display: inline-block; background: var(--paper); color: var(--ink); border: 0;
+  padding: 13px 26px; font-size: 16px; font-weight: 500; border-radius: 3px; min-height: 46px;
+}
+.button:hover { background: var(--gold); }
+.quiet { color: var(--text-2); border-bottom-color: var(--rule-soft); }
+.quiet:hover { color: var(--paper); }
+
+/* the switchboard ----------------------------------------------------- */
+
+.board {
+  border-top: 1px solid var(--rule-soft);
+  border-bottom: 1px solid var(--rule-soft);
+  background: var(--raise);
+  padding: clamp(20px, 2.4vw, 26px) 0 clamp(24px, 3vw, 34px);
+}
+.board .shell { max-width: 1380px; }
+.caption {
+  font-size: 14.5px;
+  color: var(--text-2);
+  max-width: 62ch;
+  margin: 0 0 16px;
+  line-height: 1.5;
+}
+
+.wire { width: 100%; height: auto; display: block; }
+.wire text { font-family: var(--sans); }
+.wire .stage { font-size: 16px; font-weight: 500; fill: var(--paper); }
+.wire .note { font-size: 13px; fill: var(--text-3); }
+.wire .refuse { font-family: var(--mono); font-size: 12.5px; fill: var(--flag-lift); letter-spacing: .01em; }
+.wire .pass { font-family: var(--mono); font-size: 12.5px; fill: var(--gold); }
+.wire .line { stroke: var(--gold); stroke-width: 2.5; fill: none; }
+.wire .branch { stroke: var(--flag-lift); stroke-width: 1.5; fill: none; }
+.wire .node { fill: var(--gold); stroke: var(--raise); stroke-width: 3; }
+.wire .dead { fill: none; stroke: var(--flag-lift); stroke-width: 1.5; }
+.wire .end { fill: var(--paper); stroke: var(--raise); stroke-width: 3; }
+.wire.narrow { display: none; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .wire .line { stroke-dasharray: 1300; stroke-dashoffset: 1300; animation: draw 1200ms cubic-bezier(.2,.7,.3,1) forwards; }
+  .wire .drawn { opacity: 0; animation: settle 460ms ease-out forwards; }
+  .wire .d1 { animation-delay: 300ms; }
+  .wire .d2 { animation-delay: 420ms; }
+  .wire .d3 { animation-delay: 540ms; }
+  .wire .d4 { animation-delay: 660ms; }
+  .wire .d5 { animation-delay: 780ms; }
+  .wire .d6 { animation-delay: 900ms; }
+  .wire .d7 { animation-delay: 1020ms; }
+}
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes settle { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* the real output, cropped at the right edge ---------------------------- */
+
+.readout { padding-block: clamp(44px, 6vw, 76px) 0; }
+.readout-head { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; margin-bottom: 16px; }
+.readout-head h2 { margin: 0; }
+.readout-head .said { font-size: 14.5px; color: var(--text-2); }
+
+.term-wrap {
+  margin-left: max(var(--gutter), calc((100vw - var(--shell)) / 2 + var(--gutter)));
+  margin-right: 0;
+}
+
+.term {
+  background: var(--sunk);
+  border: 1px solid var(--rule-soft);
+  border-right: 0;
+  border-radius: 4px 0 0 4px;
+  padding: 22px 0 22px 24px;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--text-2);
+  white-space: pre;
+}
+.term b { color: var(--paper); font-weight: 400; }
+.term .fire { color: var(--gold); }
+.term .halt { color: var(--flag-lift); }
+.term .dim { color: var(--text-3); }
+
+/* prose ---------------------------------------------------------------- */
+
+.body { padding-block: clamp(40px, 6vw, 72px) 0; }
+section { padding-bottom: clamp(28px, 4vw, 48px); }
+
+h2 {
+  font-size: clamp(23px, 1rem + 1vw, 28px);
+  line-height: 1.22; font-weight: 500; letter-spacing: -.016em;
+  margin: clamp(36px, 5vw, 56px) 0 16px; max-width: 34ch;
+}
+h3 {
+  font-size: 19.5px; font-weight: 500; letter-spacing: -.006em;
+  margin: 34px 0 8px; color: var(--gold);
+}
+p { max-width: var(--measure); margin: 0 0 18px; color: var(--text-2); }
+p strong { color: var(--paper); font-weight: 500; }
+
+blockquote {
+  margin: 26px 0; padding: 2px 0 2px 20px;
+  border-left: 3px solid var(--gold); max-width: var(--measure);
+}
+blockquote p { margin: 0; font-size: 18px; color: var(--paper); }
+
+code { font-family: var(--mono); font-size: .92em; color: var(--paper); background: var(--raise); padding: 1px 5px; border-radius: 2px; }
+pre {
+  background: var(--sunk); border: 1px solid var(--rule-soft); color: var(--text-2);
+  padding: 18px 22px; border-radius: 4px; overflow-x: auto; max-width: 880px;
+  font-size: 13.5px; line-height: 1.7;
+}
+pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+
+.verdicts { list-style: none; padding: 0; margin: 22px 0; max-width: var(--measure); }
+.verdicts li {
+  display: grid; grid-template-columns: 118px minmax(0, 1fr); gap: 16px;
+  padding: 12px 0; border-top: 1px solid var(--rule-soft); color: var(--text-2);
+}
+.verdicts li:last-child { border-bottom: 1px solid var(--rule-soft); }
+.verdicts .v { font-family: var(--mono); font-size: 13.5px; color: var(--gold); padding-top: 3px; }
+.verdicts .hard .v { color: var(--flag-lift); }
+
+.scroll { overflow-x: auto; margin: 22px 0; max-width: 980px; }
+table { border-collapse: collapse; width: 100%; font-size: 16px; }
+th, td { text-align: left; vertical-align: top; padding: 12px 20px 12px 0; border-bottom: 1px solid var(--rule-soft); color: var(--text-2); }
+thead th { font-size: 13.5px; font-weight: 500; color: var(--text-3); border-bottom: 1px solid var(--rule); padding-bottom: 8px; }
+td.gate, th.gate { font-family: var(--mono); font-size: 13.5px; white-space: nowrap; color: var(--gold); }
+td.gate.fail { color: var(--flag-lift); }
+
+.bottom {
+  margin-top: clamp(48px, 7vw, 88px); border-top: 1px solid var(--rule-soft);
+  padding: 26px 0 52px; font-size: 15px; color: var(--text-3);
+}
+.bottom a { color: var(--paper); }
+
+/* narrow ---------------------------------------------------------------- */
+
+@media (max-width: 900px) {
+  .readout-head { display: block; }
+  .readout-head .said { display: block; margin: 6px 0 0; }
+}
+
+@media (max-width: 680px) {
+  body { font-size: 16.5px; }
+  .wire.wide { display: none; }
+  .wire.narrow { display: block; }
+  .wire .stage { font-size: 17px; }
+  .wire .note { font-size: 13.5px; }
+  .top .shell { padding-top: 16px; padding-bottom: 14px; }
+  .top nav { gap: 18px; font-size: 15px; }
+  .button { width: 100%; text-align: center; }
+  .verdicts li { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .board { padding-top: 26px; }
+}

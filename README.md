@@ -240,7 +240,7 @@ surprise on the day it matters.
   alias defined on the same line. A command hidden in a script file, a `sh -c "$(cat x)"`, or SQL
   sent through a file or a stored procedure walks past them. They fail closed: with no `python3`
   on the path they refuse rather than guess.
-- **The unlock phrase** is `UNLOCK IRREVERSIBLE` by default; set `PANDORAS_UNLOCK_PHRASE` to your
+- **The unlock phrase** is `flyingfish` by default; set `PANDORAS_UNLOCK_PHRASE` to your
   own. It counts only when a person types it as a whole message or on a line by itself, and it
   then holds for the rest of that session. Pick a phrase that is not ordinary English.
 - **The report-overwrite guard** refuses a whole-file `Write` onto an existing `.md` at the root

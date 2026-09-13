@@ -186,7 +186,7 @@ function withTranscript(records, fn) {
   try { return fn(file); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 const user = (text, extra = {}) => ({ type: 'user', message: { role: 'user', content: text }, ...extra });
-const PHRASE = 'UNLOCK IRREVERSIBLE';
+const PHRASE = 'flyingfish';
 
 T('unlock: the phrase as the whole message unlocks', () => withTranscript([user('hello'), user(PHRASE)], (t) =>
   allow(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }))));
@@ -207,7 +207,7 @@ T('unlock: $PANDORAS_UNLOCK_PHRASE replaces the default, whole-message rule incl
 }));
 T('RED-PROOF unlock: the refusal reason names the phrase the operator must type', () => {
   const r = deny(IRREVERSIBLE, bash('git push --force origin main'));
-  assert.match(r.reason, /UNLOCK IRREVERSIBLE/);
+  assert.match(r.reason, /flyingfish/);
 });
 
 // ---------------------------------------------------------------- the report-overwrite guard

@@ -7,7 +7,7 @@
 # ──────────────────────────────────────────────────────────────────────────────────────────────
 #
 # THE UNLOCK PHRASE IS CONFIGURABLE. Set $PANDORAS_UNLOCK_PHRASE to whatever your team says out
-# loud when it means it; the default is "UNLOCK IRREVERSIBLE". The phrase must be typed by a real
+# loud when it means it; the default is "flyingfish". The phrase must be typed by a real
 # USER in this session's transcript, as the WHOLE message or as a line by itself: a phrase quoted
 # inside a sentence, a pasted log that happens to carry it, or a brief that mentions the rule does
 # not unlock anything. An agent cannot unlock itself by writing the words, which is the entire
@@ -35,7 +35,7 @@ command -v python3 >/dev/null 2>&1 && python3 -c 'pass' >/dev/null 2>&1 || {
   exit 0
 }
 INPUT=$(cat)
-UNLOCK="${PANDORAS_UNLOCK_PHRASE:-UNLOCK IRREVERSIBLE}"
+UNLOCK="${PANDORAS_UNLOCK_PHRASE:-flyingfish}"
 
 # One line per refusal. A logging failure must never change a verdict, hence the trailing || true.
 # A call with no chat id attached is a synthetic one from the assertion suite, not a real refusal,

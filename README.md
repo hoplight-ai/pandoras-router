@@ -5,7 +5,7 @@ before any of them start, then independently verify what each one claims it fini
 
 ## The problem
 
-Every tool in this category solves parallel agents with isolation. Give each agent its own git
+Every tool in this category that I compared, fourteen at the time of writing, solves parallel agents with isolation. Give each agent its own git
 worktree or its own container and they stop fighting over one working directory. That is real and
 it is not enough. Two agents in two copies can still rewrite the same file, and nothing notices
 until the merge, by which point both pieces of work exist and one of them has to lose.
@@ -117,7 +117,7 @@ words is never graded DONE by gates that happened to pass.
 
 ### The liveness gate, and skip is not a pass
 
-`live` is the gate nothing else in the field runs. Every other check asks a question about the
+`live` is the gate none of those fourteen runs. Every other check asks a question about the
 repository, and all of them can be true while the page a person opens is last week's build. So the
 close issues a GET and reads what came back.
 

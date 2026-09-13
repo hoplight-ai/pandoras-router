@@ -5,3 +5,4 @@ node_modules
 # Written by the guard hooks at runtime, one line per refusal. Never committed: it is a record of
 # what a particular machine refused, including paths from that machine.
 hooks/guard-log.jsonl
+.vercel

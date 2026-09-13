@@ -28,7 +28,7 @@
   their declared file scopes disjoint before any of them start, and it independently verifies what
   each one claims it finished.</p>
 
-  <p>Every tool in this category solves parallel agents with isolation. Give each agent its own git
+  <p>Every tool in this category that I compared, fourteen at the time of writing, solves parallel agents with isolation. Give each agent its own git
   worktree or its own container and they stop fighting over one working directory. That is real,
   and it is not enough. Two agents in two copies can still rewrite the same file, and nothing
   notices until the merge, by which point both pieces of work exist and one of them has to lose.</p>
@@ -82,7 +82,7 @@
   STATUS word, can only lower the grade: a report that says PARTIAL in its own words is never
   graded DONE by gates that happened to pass.</p>
 
-  <p>One of those gates is the one nothing else in the field runs. Every other check asks a
+  <p>One of those gates is the one none of those fourteen runs. Every other check asks a
   question about the repository, and all of them can be true while the page a person opens is last
   week's build. So the close issues a GET and reads what came back. It returns three values, not
   two:</p>

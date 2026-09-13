@@ -1,5 +1,7 @@
 # Pandora's Router
 
+Site: https://pandoras-router.vercel.app
+
 Run many AI coding agents on one codebase at once: prove their declared file scopes disjoint
 before any of them start, then independently verify what each one claims it finished.
 

@@ -315,15 +315,21 @@ surprise on the day it matters.
   short-lived `.lock.break` file guards the break. It is a lock for one local filesystem, not for a
   network share.
 - **`close` runs the branch's own `npm run build` on the dispatcher's machine**, in the lane's
-  checkout, with a 15-minute time limit (`PANDORAS_BUILD_TIMEOUT_MS` overrides it). Past the limit
-  the build's whole process group is killed and the gate records `no`; only the last 64 KB of its
+  checkout, with a 15-minute time limit (`PANDORAS_BUILD_TIMEOUT_MS` overrides it). No shell is
+  involved on any OS: npm runs as `node <npm-cli.js> run build`, with npm-cli.js found from
+  `npm_execpath`, then beside the running Node, then (macOS and Linux only) the plain `npm` on
+  PATH. That is how Windows builds too, where `npm` is a batch file Node will not start without a
+  shell. Past the limit the build is killed with everything it started, and the gate records `no`:
+  on macOS and Linux its process group gets SIGTERM then SIGKILL, on Windows
+  `taskkill /pid <pid> /T /F` ends the process tree. Only the last 64 KB of its
   output is kept, and the close prints that tail when the build fails. That is what a build gate
   is, and it means a lane's `package.json` runs code where the close runs, with the close's
   permissions and no sandbox. Do not close a branch you would not build. A green build only counts
   on a fresh base: a branch missing commits that landed on main, other than its own landing merge,
   records `no` with those commits named and the build is not run. A checkout with no `build` script
-  records `n/a`; one with no `node_modules`, npm missing from PATH, or a close run with
-  `--no-build`, records `skip`, which is not a pass.
+  records `n/a`; one with no `node_modules`, an npm that cannot be found by those three routes (the
+  skip names each path tried), or a close run with `--no-build`, records `skip`, which is not a
+  pass.
 - **The two command guards in `hooks/`, `guard-irreversible.mjs` and `guard-report-overwrite.mjs`,
   are Node pattern matchers.** They use Node built-ins only and need nothing else on the path: no
   bash, no Python. The irreversible-action guard refuses what it can see on the command line or in

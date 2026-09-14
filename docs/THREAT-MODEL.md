@@ -77,15 +77,23 @@ Both are under "What this touches on your machine" in the README, and both are d
    worktree by hand leaves its copy behind.
 2. **`close` runs the branch's own build on the dispatcher's machine**, in the lane's checkout.
    That is what a build gate is, and it means a lane's `package.json` runs code where the close runs.
-   The run is bounded, not contained (`src/lib/build.mjs`): `npm` is spawned with two arguments and
-   no shell, in its own process group; after 15 minutes by default, or `PANDORAS_BUILD_TIMEOUT_MS`
-   when set, the whole group gets SIGTERM and then SIGKILL 2 seconds later, and the gate records
-   `no`; only the last 64 KB of combined output is kept, so a build that prints without end cannot
-   exhaust the close's memory. A build that exits 0 inside the limit is the only `yes`. npm missing
-   from PATH is `skip`. Before any of that, a branch that lacks commits on main other than its own
-   landing merge grades `no` and the build is not started. None of these limits stops what the
-   script does while it runs: it can still read files, open the network or spawn a process that
-   leaves the group.
+   The run is bounded, not contained (`src/lib/build.mjs`): no shell on any OS. npm is resolved to
+   its JavaScript entry point and run by the close's own Node as an argument array,
+   `node <npm-cli.js> run build`, with npm-cli.js taken from `npm_execpath` when that names an
+   existing `.js` or `.cjs` file, else from beside the running Node; only on macOS and Linux does it
+   fall back to the plain `npm` executable on PATH. On Windows `npm` is `npm.cmd`, which Node will
+   not start without a shell, and a shell would reintroduce the argument re-parsing this design
+   removes, so Windows has no bare fallback. After 15 minutes by default, or
+   `PANDORAS_BUILD_TIMEOUT_MS` when set, the build is killed with what it started and the gate
+   records `no`: on macOS and Linux the build leads its own process group, which gets SIGTERM and
+   then SIGKILL 2 seconds later; on Windows, which has no process groups, `taskkill /pid <pid> /T /F`
+   runs (by full path under SystemRoot, argument array, no shell) and ends the process tree. Only
+   the last 64 KB of combined output is kept, so a build that prints without end cannot exhaust the
+   close's memory. A build that exits 0 inside the limit is the only `yes`. npm that resolves to
+   nothing is `skip`, naming every path tried. Before any of that, a branch that lacks commits on
+   main other than its own landing merge grades `no` and the build is not started. None of these
+   limits stops what the script does while it runs: it can still read files, open the network or
+   spawn a process that leaves the group (or, on Windows, detaches from the tree).
 
 The README's section on what this touches describes the guards as they are now: Node only, failing
 closed on input they cannot read, and an unlock phrase with no default.

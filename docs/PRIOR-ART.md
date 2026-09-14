@@ -12,11 +12,10 @@ copies where the collision surfaces at merge.
 | [Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) | no | recomputed from pull-request and CI facts on every ask | no | Never stores a status at all, so a stored status can never go stale against reality. A cleaner idea than a ledger, worth reading for its own sake. This project keeps an append-only ledger because it needs a lane's declared scope and its open timestamp recorded at the moment of dispatch, which no PR or CI fact carries. |
 | isolation-only tools (a worktree or container per agent) | no | no | no | A real fix for a real problem. They do not address two agents editing one file in two copies. |
 
-The README reports that across a source-level read of 13 comparable tools, none did both
-scope-before-dispatch and verify-after, and none checked that a merged change is actually live at
-a URL. That gap, rather than either half on its own, is what this project fills. The README's
-opening section gives the number compared as fourteen; this document repeats the prior-art
-section's figure and does not settle which count is current.
+Of the fourteen tools compared before publishing, none did both scope-before-dispatch and
+verify-after, and none checked that a merged change is actually live at a URL. That gap, rather
+than either half on its own, is what this project fills. An earlier draft said 13 in one place; the
+comparison record says fourteen, and the README and this note now agree.
 
 ## A row not added: Clash
 

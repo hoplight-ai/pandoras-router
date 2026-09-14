@@ -77,7 +77,5 @@ Both are under "What this touches on your machine" in the README, and both are d
 2. **`close` runs the branch's own build on the dispatcher's machine**, in the lane's checkout.
    That is what a build gate is, and it means a lane's `package.json` runs code where the close runs.
 
-That README section still describes the guards as they were before they moved to Node: it says they
-refuse when `python3` is missing and that the phrase has a default. Both statements are out of date.
-The guards now need only Node, and the phrase has no default. The README is owned by a parked lane
-and is corrected there.
+The README's section on what this touches describes the guards as they are now: Node only, failing
+closed on input they cannot read, and an unlock phrase with no default.

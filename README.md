@@ -28,17 +28,17 @@ From the repo root:
 npm test
 ```
 
-CI runs this same command on every push and pull request, on Node 22 and 24, on Ubuntu and macOS
-(four matrix cells, `.github/workflows/ci.yml`).
+CI runs this same command on every push and pull request, on Node 22 and 24, on Ubuntu, macOS and
+Windows (six matrix cells, `.github/workflows/ci.yml`).
 
-619 assertions across 15 suite files, all passing. 247 of them are marked red-proof by their own
-suite: each asserts a refusal, or that a weakening turns the suite red, so deleting a guard turns
-them red rather than quietly widening what the tool allows. Each suite prints its own count as it
-runs: the allocator and scope suite reports 137 of its 318 as red-proof, the shell guards 34 of
-50, each fed the exact input that once walked past it, the liveness gate 25 of 53, the close
-driver's verify dispatch 10 of 14, each running the real close against a local server, the lock's
-concurrency suite 7 of 10, each racing two real processes, and the scope property suite 5 of 15,
-over six properties at 3,000 generated cases each.
+Every suite prints its own assertion count as it runs, and how many of those are red-proof: each
+asserts a refusal, or that a weakening turns the suite red, so deleting a guard turns them red
+rather than quietly widening what the tool allows. The counts are not copied here because they grow
+with every change; the run is the record. The suites that carry the most weight are the allocator
+and scope suite, the shell guards (each fed the exact input that once walked past it), the liveness
+gate, the close driver's verify dispatch (the real close against a local server), the build gate
+(the real close against a fake npm), the lock's concurrency suite (two real processes racing), and
+the scope property suite (six properties over thousands of generated cases).
 
 The runner discovers its suites: every `*-test.mjs` file in `test/` runs, so a new suite needs no
 list edited. After the suites, `npm test` runs `npm run typecheck`, which holds the JSDoc in every

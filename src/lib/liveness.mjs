@@ -1,3 +1,4 @@
+// @ts-check
 // liveness.mjs — did the merged change actually reach the deployed surface?
 //
 // THIS IS THE GATE NOTHING ELSE RUNS. Every other check in a close asks a question about the
@@ -112,7 +113,7 @@ export function livenessHeaders(auth, env = process.env, envPrefix = DEFAULT_ENV
     // The env var holds `user:password`. Already-encoded values are accepted as-is so an operator
     // who stored a full `Basic xxx` header is not silently double-encoded.
     const header = /^basic\s/i.test(value) ? value : `Basic ${Buffer.from(value, 'utf8').toString('base64')}`;
-    return { headers: { authorization: header }, missing: null };
+    return { headers: { authorization: header }, missing: null, refused: null };
   }
   if (auth.kind === 'cookie') return { headers: { cookie: value }, missing: null, refused: null };
   if (auth.kind === 'header') return { headers: { [auth.header.toLowerCase()]: value }, missing: null, refused: null };
@@ -184,8 +185,8 @@ export function gradeLiveness({ status, body, expect, url, error = null }) {
 /**
  * Probe one repo's deployed surface.
  *
- * @param {object} o
- * @param {object|null} o.config     a parsed liveness row, or null when the repo declares none
+ * @param {object} [o]
+ * @param {object|null} [o.config]   a parsed liveness row, or null when the repo declares none
  * @param {string} [o.repo]          for the SKIPPED sentence when there is no config
  * @param {object} [o.env]           where credential NAMES are resolved
  * @param {Function} [o.fetchImpl]   injected for testing; defaults to the global fetch
@@ -368,10 +369,11 @@ export function gradeHeaderEcho({ status, headerValue, header, sha, url, error =
 /**
  * Probe one repo's header echo.
  *
- * @param {object} o
- * @param {{url:string, verify:{kind:'header',path:string,header:string}, auth?:object|null, timeoutMs?:number}} o.config
- *                                  the repo's url and parsed verify row; auth and timeout as the liveness row spells them
- * @param {string}   o.sha          the lane's merge commit; with none there is nothing to compare and the probe is not sent
+ * @param {object} [o]
+ * @param {{url:string, verify:{kind:string,path:string,header:string}, auth?:object|null, timeoutMs?:number}} [o.config]
+ *                                  the repo's url and parsed verify row; auth and timeout as the liveness row spells them.
+ *                                  A missing url, or a verify kind other than 'header', is a SKIP.
+ * @param {string}   [o.sha]        the lane's merge commit; with none there is nothing to compare and the probe is not sent
  * @param {string}   [o.repo]
  * @param {object}   [o.env]
  * @param {Function} [o.fetchImpl]

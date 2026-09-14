@@ -1,3 +1,4 @@
+// @ts-check
 // lock.mjs — one exclusive lock on the router's state directory, `_handoffs/_lanes/`.
 //
 // THE DEFECT, 2026-09-14, found by three independent reviewers reading the public repo. Every write
@@ -53,6 +54,11 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { replaceFromIndex } from './atomic.mjs';
+
+/**
+ * The error a refused lock throws: `code` says which refusal, `holder` names who held it.
+ * @typedef {Error & {code?: string, holder?: object|null}} LockError
+ */
 
 /**
  * Past this age a lock is broken whoever holds it. FIVE MINUTES, and the number is headroom, not a
@@ -198,7 +204,8 @@ function installExitHook() {
  * @param {number} [o.waitMs]           how long to wait for a live holder, default WAIT_MS
  * @param {(line:string)=>void} [o.log] where the one BROKEN line goes, default stderr
  * @returns {() => void}  release; idempotent
- * @throws  an Error with code LOCK_HELD naming the holder, after the wait
+ * @throws  {LockError} code LOCK_HELD naming the holder, after the wait; code LOCK_NO_STATE when
+ *          there is no state directory to lock
  */
 export function acquireLock(root, { waitMs = WAIT_MS, log = (l) => console.error(l) } = {}) {
   const file = lockPath(root);
@@ -209,7 +216,7 @@ export function acquireLock(root, { waitMs = WAIT_MS, log = (l) => console.error
     return () => { if (!done) { done = true; mine.depth--; } };
   }
   if (!fs.existsSync(lockDir(root))) {
-    const e = new Error(`lock REFUSED — ${lockDir(root)} does not exist, so there is no router state here to lock. Nothing was written.`);
+    const e = /** @type {LockError} */ (new Error(`lock REFUSED — ${lockDir(root)} does not exist, so there is no router state here to lock. Nothing was written.`));
     e.code = 'LOCK_NO_STATE';
     throw e;
   }
@@ -234,12 +241,12 @@ export function acquireLock(root, { waitMs = WAIT_MS, log = (l) => console.error
     }
     if (Date.now() >= deadline) {
       const who = last ? describe(last) : 'a holder that released and was re-taken on every poll';
-      const e = new Error(
+      const e = /** @type {LockError} */ (new Error(
         `lock REFUSED — the router's state lock ${path.relative(root, file)} is held by ${who}.`
         + `\n  Waited ${Math.round(waitMs / 1000)}s. That holder is ALIVE, so the lock was not broken, and nothing was written.`
         + `\n  Re-run when it finishes. If it is hung, stop that process; never delete the lock file while its holder is alive.`
         + `\n  A lock older than ${STALE_MS / 1000}s is broken automatically, whoever holds it.`,
-      );
+      ));
       e.code = 'LOCK_HELD';
       e.holder = last?.holder ?? null;
       throw e;

@@ -407,7 +407,9 @@ T('exclusive: a policy row adds to the built-in list and nothing can subtract fr
   assert.ok(merged.includes('db/functions'));
   // the list itself is frozen, so no caller can edit an entry away at runtime
   assert.ok(Object.isFrozen(S.BUILTIN_EXCLUSIVE), 'frozen');
-  assert.throws(() => { S.BUILTIN_EXCLUSIVE.push('x'); }, TypeError);
+  // The cast drops `readonly` on purpose: this line exists to attempt the write the type forbids and
+  // prove the runtime refuses it too.
+  assert.throws(() => { /** @type {string[]} */ (S.BUILTIN_EXCLUSIVE).push('x'); }, TypeError);
 });
 
 T('exclusive: every built-in entry is already in canonical form, so the compare can never skip it', () => {

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // ══════════════════════════════════════════════════════════════════════════════════════════════
 // LIVE. Wired in .claude/settings.json as a PreToolUse matcher on `Read`.
 //

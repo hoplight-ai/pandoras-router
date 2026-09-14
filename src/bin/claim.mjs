@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // claim.mjs — take and release a claim WITHOUT opening a lane.
 //
 // WHY THIS EXISTS. Every claim in CLAIMS.md was written by `lane-open`, which means a dispatch that

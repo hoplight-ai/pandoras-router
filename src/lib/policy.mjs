@@ -1,3 +1,4 @@
+// @ts-check
 // policy.mjs — the per-repo facts, loaded from _handoffs/_lanes/POLICY.md.
 //
 // A repo that is not in the table routes nothing. Guessing a deploy style or a verification method

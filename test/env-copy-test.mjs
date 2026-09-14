@@ -108,6 +108,7 @@ T('a listed key the source file lacks is printed by name as missing, and the cop
   const checkoutDir = mkTmp('env-copy-checkout-');
   try {
     fs.writeFileSync(path.join(repoDir, '.env.local'), FIXTURE_ENV);
+    /** @type {ReturnType<typeof copyEnvFile>} assigned inside the captured callback, which runs synchronously */
     let r;
     const log = withCapturedLog(() => {
       r = copyEnvFile({ repoDir, checkoutDir, inPlace: false, envKeys: ['ALPHA_KEY', 'ZETA_KEY'] });

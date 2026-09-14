@@ -8,7 +8,8 @@
   "bin": { "pandoras-router": "src/bin/router.mjs" },
   "files": ["src", "hooks", "examples", "LICENSE", "CODE_OF_CONDUCT.md"],
   "scripts": {
-    "test": "node test/run.mjs"
+    "test": "node test/run.mjs && npm run typecheck",
+    "typecheck": "npx --yes --package=typescript@6.0.3 --package=@types/node@22.20.2 -- node test/typecheck.mjs"
   },
   "keywords": ["agents", "orchestration", "concurrency", "git-worktree", "verification", "ci"]
 }

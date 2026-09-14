@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // lane-open.mjs — open a lane from an allocator card. CREATES ONLY. Deletes nothing, ever.
 //
 // USAGE

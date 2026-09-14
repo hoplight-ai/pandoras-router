@@ -1,3 +1,4 @@
+// @ts-check
 // claims.mjs — one parser for _handoffs/_lanes/CLAIMS.md, shared by the board, the allocator,
 // lane-open and lane-close. There was one parser inside fire-board.mjs; four copies of it would
 // have drifted within a week and the board would have disagreed with the allocator about who holds
@@ -193,7 +194,10 @@ export function appendClaim(root, { repo, chat, stamp, session, note = null }) {
  * file as it stands INSIDE the section, never a copy read before it. Returns whatever the transform
  * returned alongside the new text; writes only when the text changed.
  *
- * @param {(text:string)=>{text:string}} transform
+ * @template {{text:string}} T
+ * @param {string} root
+ * @param {(text:string)=>T} transform
+ * @returns {T}
  */
 export function rewriteClaims(root, transform) {
   return withLock(root, () => {
@@ -222,7 +226,8 @@ export function rewriteClaims(root, transform) {
  * re-parsed as an active claim — the parser skips `#` before it looks at anything else. That is what
  * makes this change strictly safer than the delete it replaces rather than merely different.
  *
- * @returns {Array<string>} the retired lines verbatim, so the caller can print them as the undo.
+ * @returns {{text:string, removed:Array<string>}} the new file text, and the retired lines verbatim
+ *   so the caller can print them as the undo.
  */
 export function releaseRewrite(text, session, stampedAt = new Date().toISOString()) {
   const removed = [];

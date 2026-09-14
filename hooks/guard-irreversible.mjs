@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // ── WHAT THIS IS ──────────────────────────────────────────────────────────────────────────────
 // WHAT IT CHECKS: a command or a database statement that cannot be undone by a later commit, and
 //                 refuses it unless the operator has typed the unlock phrase in this session.

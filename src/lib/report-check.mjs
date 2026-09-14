@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // report-check.mjs — mechanize the report rules in the project rules file §"your closing summary
 // block is a claim, not a receipt" and the standing orders.
 //
@@ -118,6 +119,7 @@ function findStatus(lines) {
       if (m) return { word: m[1], line: i, source: 'fenced report block', region: fenced };
     }
   }
+  /** @type {Array<[RegExp, string]>} pattern that declares a status, and the name of that form */
   const declarers = [
     [/STATUS\s*(\*\*)?\s*[:=]/i, 'STATUS: line'],
     [/\bREPORT\b/, 'REPORT header line'],

@@ -1,3 +1,4 @@
+// @ts-check
 // findings.mjs — a lane's report block, turned into rows a query can answer.
 //
 // WHY THIS EXISTS, and it is the whole argument for the table.

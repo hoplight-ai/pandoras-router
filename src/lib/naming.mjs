@@ -1,3 +1,4 @@
+// @ts-check
 // naming.mjs — every name a lane needs, derived once, from the brief's own filename.
 //
 // WHY THIS IS A MODULE AND NOT SIX SENTENCES IN A DISPATCH TRANSCRIPT. A dispatcher otherwise

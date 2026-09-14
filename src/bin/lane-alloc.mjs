@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // lane-alloc.mjs — turn the bridge into ready-to-fire lane cards.
 //
 // USAGE

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // apply-atomic.mjs — apply a git patch to this repo so that every target file is replaced by ONE
 // rename and is never truncated in place.
 //

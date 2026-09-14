@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // lane-land.mjs — land a lane on main as ONE merge commit, and write the LAND record.
 //
 //   pandoras-router land <lane>             merge, record, print the push/deploy step

@@ -46,6 +46,21 @@
 //   no       the surface answered, and it is NOT serving this build — a real red
 //   skipped  nothing was measured, for a named reason
 //
+// ── THREE FORMS, AND THE VERDICT SAYS WHICH ONE IT IS ──────────────────────────────────────────
+//
+// A yes is not one thing. Ranked by what it proves:
+//   sha       the deployment echoes its own commit in a JSON body (POLICY.md `verify: sha:...`,
+//             graded in close.mjs's liveShaVerdict). The only proof that cannot pass on stale
+//             bytes, because an older build does not contain this branch's commit. Its yes says
+//             "deployment identity".
+//   header    the same echo, read from ONE response header (`verify: header:<path>:<header-name>`,
+//             parsed and probed at the bottom of this file). Same strength, same sentence.
+//   string    a marker found in a body (this file's probeLiveness, and the close's string verdict).
+//             A cached response, a stale build that happens to carry the string, or an unrelated
+//             route all pass it. Its yes says "best-effort evidence" and names what it did not prove.
+// The value column stays yes/no/skipped; only the sentence beside it changes. Lead with sha
+// wherever the surface can echo its commit; the string form is for surfaces that cannot.
+//
 // ── THE NETWORK CALL IS INJECTED ───────────────────────────────────────────────────────────────
 //
 // `fetchImpl` defaults to the global fetch and is an argument, so the whole gate is testable
@@ -57,6 +72,17 @@ export const LIVE_NO = 'no';
 export const LIVE_SKIPPED = 'skipped';
 
 const NOT_A_PASS = 'Nothing was measured, and a skip is not a pass.';
+
+/**
+ * THE STRING FORM GRADES ITSELF. A marker found in a body is best-effort evidence: a cached
+ * response, a stale build that happens to carry the string, or an unrelated route that echoes it
+ * all read the same from here. Only a deployment echoing its own commit (the sha form, or the
+ * header form below) proves that the served build IS the merged commit. The verdict value does
+ * not change — yes is yes — but every string `yes` says which kind of yes it is, where a reader
+ * grades, not only in a comment nobody opens. Exported so the close's own string verdict can say
+ * the identical sentence rather than a paraphrase that drifts.
+ */
+export const STRING_YES_CAVEAT = 'This is best-effort evidence: a body match does not prove that the served build is the merged commit (a cached response, a stale build carrying the string, or an unrelated route reads the same); only a sha or header echo of the commit proves which build is serving.';
 
 /** Only environment variables whose names start with this may be sent by a probe. */
 export const DEFAULT_ENV_PREFIX = 'PANDORAS_';
@@ -144,10 +170,10 @@ export function gradeLiveness({ status, body, expect, url, error = null }) {
     };
   }
   if (!expect) {
-    return { value: LIVE_YES, why: `${url} answered 200, and this repo's policy asks for nothing more than a 200.` };
+    return { value: LIVE_YES, why: `${url} answered 200, and this repo's policy asks for nothing more than a 200. ${STRING_YES_CAVEAT}` };
   }
   if (String(body ?? '').includes(expect)) {
-    return { value: LIVE_YES, why: `${url} answered 200 and carried "${expect}".` };
+    return { value: LIVE_YES, why: `${url} answered 200 and carried "${expect}". ${STRING_YES_CAVEAT}` };
   }
   return {
     value: LIVE_NO,
@@ -215,4 +241,200 @@ export async function probeLiveness({ config, repo = 'this repo', env = process.
   }
 
   return gradeLiveness({ status, body, expect: config.expect, url: config.url, error });
+}
+
+// ── THE HEADER ECHO FORM ───────────────────────────────────────────────────────────────────────
+//
+// `verify: header:<path>:<header-name>` in POLICY.md's repos table. GET url+path, read ONE
+// response header, pass when its value contains the lane's merge commit. It is the sha form for a
+// deployment that names its release in a header rather than a JSON body (a CDN's release tag, a
+// platform's deployment id header, an app that sets one on purpose), and it carries the sha form's
+// strength: a stale build does not know a commit it does not contain, so this cannot pass on stale
+// bytes. That is the whole reason it exists beside the string form rather than as a variant of it.
+//
+// THE BODY IS NEVER READ. Not capped, not sampled, not touched: a body that happens to carry the
+// sha counts for nothing here, because the row said "header" and a proof that quietly widens what
+// it accepts is a proof that quietly weakens. Reading zero bytes is inside the 1 MB cap by
+// construction. The redirect rule and the credential rule are the liveness probe's, unchanged.
+//
+// WHERE THE PARSER LIVES. POLICY.md's `verify` column is parsed in policy.mjs (parseVerify), which
+// another lane holds, so the header form is parsed HERE and offered through `parseVerifyWithHeader`,
+// a one-line adapter that tries this form first and hands everything else to the policy parser.
+// The allowance policy.mjs needs, when its lane is free, is one line inside parseVerify:
+//   if (v.startsWith('header:')) return parseVerifyHeader(repo, v);
+// The `auth` column's `header:<Name>:<ENV_VAR>` is a different column and never reaches this parser.
+
+/** A header NAME per RFC 7230: a token, no spaces, no colons. Anything else is refused, never trimmed into shape. */
+const HEADER_TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+/** The fewest hex characters a header may abbreviate the commit to and still be read as naming it. */
+export const HEADER_SHA_MIN_PREFIX = 7;
+
+/**
+ * Parse `header:<path>:<header-name>`. Returns null for any form that is not this one, so an
+ * adapter can fall through to the policy parser; THROWS on a malformed header form, in the policy
+ * parser's own voice, because a row that half-parses would probe a path nobody wrote.
+ *
+ * @returns {{kind:'header', path:string, header:string}|null}
+ */
+export function parseVerifyHeader(repo, raw) {
+  const v = String(raw ?? '').trim();
+  if (!v.startsWith('header:')) return null;
+  const rest = v.slice(7);
+  const i = rest.lastIndexOf(':');
+  const path = i >= 0 ? rest.slice(0, i) : '';
+  const header = i >= 0 ? rest.slice(i + 1) : '';
+  if (!path.startsWith('/') || !header || !HEADER_TOKEN.test(header))
+    throw new Error(`policy: repo "${repo}" verify "${v}" must be header:<path>:<header-name> (an absolute path, then one header name with no spaces)`);
+  return { kind: 'header', path, header: header.toLowerCase() };
+}
+
+/** The one-line adapter: this form first, every other form to the policy parser it is handed. */
+export const parseVerifyWithHeader = (repo, raw, parseVerify) => parseVerifyHeader(repo, raw) ?? parseVerify(repo, raw);
+
+/**
+ * Does a header value name this commit? Containment, the same rule the sha form applies to its
+ * body field: the full sha anywhere in the value passes, and so does a prefix of at least
+ * HEADER_SHA_MIN_PREFIX hex characters, because platforms abbreviate. Hex is case-insensitive.
+ *
+ * @returns {{named:boolean, abbreviated:boolean}}
+ */
+export function headerNamesCommit(headerValue, sha) {
+  const value = String(Array.isArray(headerValue) ? headerValue.join(', ') : headerValue ?? '').toLowerCase();
+  const full = String(sha ?? '').trim().toLowerCase();
+  if (!value || !full) return { named: false, abbreviated: false };
+  if (value.includes(full)) return { named: true, abbreviated: false };
+  // The longest prefix of the sha that the value carries, provided it is long enough to be an identity
+  // and sits on a hex boundary (so `abc1234` inside `abc12345678` of some OTHER commit is not credited).
+  for (let n = Math.min(full.length - 1, 40); n >= HEADER_SHA_MIN_PREFIX; n--) {
+    const prefix = full.slice(0, n);
+    const at = value.indexOf(prefix);
+    if (at === -1) continue;
+    const after = value[at + n];
+    if (after === undefined || !/[0-9a-f]/.test(after)) return { named: true, abbreviated: true };
+  }
+  return { named: false, abbreviated: false };
+}
+
+/**
+ * Grade one header-echo probe. Pure — no network, no clock.
+ *
+ * @param {{status:number, headerValue:string|string[]|null, header:string, sha:string, url:string, error?:string|null}} p
+ * @returns {{value:string, why:string}}
+ */
+export function gradeHeaderEcho({ status, headerValue, header, sha, url, error = null }) {
+  if (error) {
+    return {
+      value: LIVE_SKIPPED,
+      why: `SKIPPED: ${url} could not be reached (${error}). An unreachable surface is unmeasured, not failed — the deployment may be fine and the network may not be. ${NOT_A_PASS}`,
+    };
+  }
+  if (status >= 300 && status < 400) {
+    return {
+      value: LIVE_NO,
+      why: `${url} answered ${status}, a redirect, which the probe did not follow because a credential was attached and a redirect would carry it to a host the policy did not name. Point the verify path at the final URL. This is a red, not a skip: something answered and it was not this build.`,
+    };
+  }
+  if (status !== 200) {
+    const gated = status === 401 || status === 403;
+    return {
+      value: LIVE_NO,
+      why: gated
+        ? `${url} answered ${status}. The probe carried whatever credential the policy named and was still refused, so either the credential is wrong or the surface is not serving. This is a red, not a skip: something answered and it was not this build.`
+        : `${url} answered ${status}, not 200. The surface is reachable and it is not serving this build.`,
+    };
+  }
+  const raw = Array.isArray(headerValue) ? headerValue.join(', ') : headerValue;
+  if (raw === null || raw === undefined || String(raw).trim() === '') {
+    return {
+      value: LIVE_NO,
+      why: `${url} answered 200 with no \`${header}\` header, so the build cannot identify itself. The body was not read and would not count: the row asked for a header echo, and a surface that stops naming its release has stopped proving anything.`,
+    };
+  }
+  const shown = String(raw).slice(0, 80);
+  const { named, abbreviated } = headerNamesCommit(raw, sha);
+  if (named) {
+    return {
+      value: LIVE_YES,
+      why: `deployment identity: ${url} answered 200 and its \`${header}\` header (${shown}) names the merge commit ${String(sha).slice(0, 8)}${abbreviated ? ', abbreviated' : ''}. The deployment named its own commit, so this cannot have passed on stale bytes. The body was not read.`,
+    };
+  }
+  return {
+    value: LIVE_NO,
+    why: `${url} answered 200 and its \`${header}\` header (${shown}) does NOT contain the merge commit ${String(sha).slice(0, 8)}. The alias is serving a build that names another commit — the deploy has not landed, or a neighbour's deploy replaced it. The body was not read and would not count.`,
+  };
+}
+
+/**
+ * Probe one repo's header echo.
+ *
+ * @param {object} o
+ * @param {{url:string, verify:{kind:'header',path:string,header:string}, auth?:object|null, timeoutMs?:number}} o.config
+ *                                  the repo's url and parsed verify row; auth and timeout as the liveness row spells them
+ * @param {string}   o.sha          the lane's merge commit; with none there is nothing to compare and the probe is not sent
+ * @param {string}   [o.repo]
+ * @param {object}   [o.env]
+ * @param {Function} [o.fetchImpl]
+ * @param {string}   [o.envPrefix]
+ * @returns {Promise<{value:string, why:string}>}
+ */
+export async function probeHeaderEcho({ config, sha, repo = 'this repo', env = process.env, fetchImpl = globalThis.fetch, envPrefix = DEFAULT_ENV_PREFIX } = {}) {
+  const verify = config?.verify;
+  if (!config?.url || verify?.kind !== 'header') {
+    return {
+      value: LIVE_SKIPPED,
+      why: `SKIPPED: ${repo} has no url and header verify row to probe, so nothing was asked. ${NOT_A_PASS}`,
+    };
+  }
+  const url = `${String(config.url).replace(/\/+$/, '')}${verify.path}`;
+  if (!String(sha ?? '').trim()) {
+    return {
+      value: LIVE_SKIPPED,
+      why: `SKIPPED: no merge commit was supplied for ${repo}, so there is nothing for the \`${verify.header}\` header at ${url} to be compared against and the probe was not sent. ${NOT_A_PASS}`,
+    };
+  }
+  if (typeof fetchImpl !== 'function') {
+    return {
+      value: LIVE_SKIPPED,
+      why: `SKIPPED: no fetch implementation is available in this runtime, so ${url} was never asked. ${NOT_A_PASS}`,
+    };
+  }
+
+  const { headers, missing, refused } = livenessHeaders(config.auth, env, envPrefix);
+  if (refused) {
+    return {
+      value: LIVE_SKIPPED,
+      why: `SKIPPED: ${repo}'s row asks for ${config.auth.kind} auth from $${refused}, and a probe may only send a variable whose name starts with ${envPrefix}. That value was never read and the probe was NOT sent. Mint a ${envPrefix}-prefixed variable for this probe and name it in the row. ${NOT_A_PASS}`,
+    };
+  }
+  if (missing) {
+    return {
+      value: LIVE_SKIPPED,
+      why: `SKIPPED: ${repo}'s row asks for ${config.auth.kind} auth from $${missing}, and that variable is unset or empty. The probe was NOT sent bare, because grading the resulting 401 would measure the credential rather than the deployment. ${NOT_A_PASS}`,
+    };
+  }
+
+  const timeoutMs = Number.isFinite(config.timeoutMs) && config.timeoutMs > 0 ? config.timeoutMs : 10000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let status = 0;
+  let headerValue = null;
+  let error = null;
+  try {
+    const redirect = config.auth ? 'manual' : 'follow';
+    const res = await fetchImpl(url, { redirect, headers, signal: controller.signal });
+    status = res.status;
+    // Only the one header. `res.headers` is a Headers object on a real fetch and may be a plain
+    // object on an injected one; neither path reads the body.
+    const h = res.headers;
+    headerValue = typeof h?.get === 'function' ? h.get(verify.header) : (h?.[verify.header] ?? null);
+  } catch (e) {
+    error = e?.name === 'AbortError'
+      ? `no answer within ${timeoutMs}ms`
+      : String(e?.message ?? e).slice(0, 120);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  return gradeHeaderEcho({ status, headerValue, header: verify.header, sha, url, error });
 }

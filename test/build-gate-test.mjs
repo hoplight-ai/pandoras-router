@@ -172,6 +172,15 @@ const greenOf = (r) => {
   return r.green;
 };
 
+/**
+ * Remove a temp directory without letting the cleanup's own error replace the assertion's. On
+ * Windows a just-killed process can hold its working directory for a moment (EPERM, EBUSY), so the
+ * removal retries; a directory that still cannot go is left in the OS temp directory.
+ */
+function removeTemp(dir) {
+  try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); } catch { /* left for the OS temp cleaner */ }
+}
+
 async function withWorkspace(opts, fn) {
   const w = makeWorkspace(opts);
   try {
@@ -182,7 +191,7 @@ async function withWorkspace(opts, fn) {
       const pids = JSON.parse(fs.readFileSync(`${w.out}.pids`, 'utf8'));
       for (const pid of [pids.child, pids.grandchild]) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
     } catch { /* no pids file */ }
-    fs.rmSync(w.ws, { recursive: true, force: true });
+    removeTemp(w.ws);
   }
 }
 
@@ -430,7 +439,7 @@ async function withBin(body, fn) {
       const pids = JSON.parse(fs.readFileSync(`${w.out}.pids`, 'utf8'));
       for (const pid of [pids.child, pids.grandchild]) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
     } catch { /* no pids file */ }
-    fs.rmSync(dir, { recursive: true, force: true });
+    removeTemp(dir);
   }
 }
 const planIn = (cwd, env) => buildPlan({ checkout: cwd, pkg: { scripts: { build: 'x' } }, nodeModules: true, env });

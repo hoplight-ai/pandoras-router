@@ -13,7 +13,9 @@
 //
 // USAGE
 //   pandoras-router close <lane>                       measure only, write nothing
-//   pandoras-router close <lane> --apply                also rename the brief and record the CLOSE
+//   pandoras-router close <lane> --apply                also rename the brief, record the CLOSE and
+//                                                       release the lane's claim, the last two under
+//                                                       the state lock in one section
 //   pandoras-router close <lane> --no-build             skip the build (records skip, not a pass)
 //   pandoras-router close <lane> --proof "<string>"     the string the liveness probe looks for,
 //                                                       overriding the policy's `expect`
@@ -38,6 +40,8 @@ import { fileURLToPath } from 'node:url';
 import { loadPolicy, repoPolicy } from '../lib/policy.mjs';
 import { loadPrefixes, classify } from '../lib/prefixes.mjs';
 import { readLanes, recordClose, laneKey } from '../lib/lanes.mjs';
+import { releaseClaim, claimsFile } from '../lib/claims.mjs';
+import { withLock } from '../lib/lock.mjs';
 import { git, repoDirFor, isRepo } from '../lib/gitread.mjs';
 import { probeLiveness, LIVE_SKIPPED } from '../lib/liveness.mjs';
 import { parseFindingLines, findingsGateVerdict, ownerDecisionLines } from '../lib/finding-lines.mjs';
@@ -323,22 +327,49 @@ async function main() {
     console.log(`  rename         ${renamePlan.why}`);
   }
 
-  recordClose(ROOT, {
-    lane: rec.lane,
-    status: graded.status,
-    merged: merged.value,
-    green: green.value,
-    live: live.value,
-    renamed: renamed.value,
-    reportFree: 'n/a',
-    stamp: new Date().toISOString(),
-    reason: graded.reason ?? '',
-    ownerWay: '-',
-    inScope: inScope.value,
-    roadmap: '-',
-    kind: kind ?? '-',
+  // ---- the CLOSE row and the claim release: ONE locked section (CONC1, 2026-09-14)
+  //
+  // Measuring can take a fifteen-minute build, and the ledger read at the top of this run is that old
+  // by now. So the lane's record is re-read under the lock first: if another close recorded a CLOSE
+  // for this lane while this one was measuring, this one writes nothing rather than stacking a second
+  // verdict on top of a record it never read. Then the CLOSE row and the release of the lane's claim
+  // land together, so no open can read a closed lane still holding its claim, or a released claim on a
+  // lane with no CLOSE.
+  const written = withLock(ROOT, () => {
+    const now = readLanes(ROOT).find((l) => l.lane === rec.lane);
+    if (!now || now.closed !== rec.closed) {
+      return { refused: `REFUSED: lane ${rec.lane} was closed by another run while this one was measuring (its record now reads ${now?.status ?? 'missing'}, closed ${now?.closed ?? '-'}). Nothing was recorded and no claim was released. Re-run the close to measure against the record as it stands.` };
+    }
+    recordClose(ROOT, {
+      lane: rec.lane,
+      status: graded.status,
+      merged: merged.value,
+      green: green.value,
+      live: live.value,
+      renamed: renamed.value,
+      reportFree: 'n/a',
+      stamp: new Date().toISOString(),
+      reason: graded.reason ?? '',
+      ownerWay: '-',
+      inScope: inScope.value,
+      roadmap: '-',
+      kind: kind ?? '-',
+    });
+    // The claim is keyed on the session the OPEN row recorded, the same join key lane-open wrote it
+    // under. Released as commented history, never deleted; see releaseRewrite in lib/claims.mjs.
+    const released = rec.session && rec.session !== '?' && fs.existsSync(claimsFile(ROOT)) ? releaseClaim(ROOT, rec.session) : [];
+    return { released };
   });
+  if (written.refused) {
+    console.error(`  ${written.refused}`);
+    process.exit(1);
+  }
   console.log('  recorded       a CLOSE row in _handoffs/_lanes/LANES.md');
+  if (written.released.length) {
+    for (const l of written.released) console.log(`  released       the claim ${l}`);
+  } else {
+    console.log(`  claim          no active claim line carried ${rec.session || '(no session)'}, so there was nothing to release`);
+  }
 }
 
 function safeRead(p) {
@@ -352,5 +383,6 @@ function statusWordOf(text) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((e) => { console.error(String(e?.stack ?? e)); process.exit(1); });
+  // A LOCK_HELD refusal names the live holder; print that, not a stack that buries it.
+  main().catch((e) => { console.error(e?.code === 'LOCK_HELD' ? e.message : String(e?.stack ?? e)); process.exit(1); });
 }

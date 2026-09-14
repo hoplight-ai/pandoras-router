@@ -152,6 +152,52 @@ export function openRefusal({ blockingChat, blockingSession, myChat, mySession, 
   };
 }
 
+/**
+ * OPEN IS A COMPARE-AND-SET (CONC1, 2026-09-14).
+ *
+ * THE DEFECT. lane-open ran the allocator, found its card firing now, and wrote the claim and the OPEN
+ * row, with nothing between the allocator's read and the write. Two dispatchers opening overlapping
+ * lanes at the same moment each read a board without the other, each got a card that fired now, and
+ * both wrote. Measured by concurrency-test.mjs against the unlocked code: two opens, two exits 0, two
+ * active claims, two OPEN rows for one lane.
+ *
+ * THE REPAIR is that lane-open re-reads the claims and the ledger INSIDE the state lock, re-runs the
+ * allocator's own decision against them (`decide` in lane-alloc.mjs, which uses the same
+ * `scopesIntersect` every card was built with), and passes both cards here. Nothing is written unless
+ * this says ok, and the write happens in the same locked section, so the board cannot move between
+ * the check and the write.
+ *
+ * THE REFUSAL IS IN THE ALLOCATOR'S OWN WORDS: `why` carries the re-read card's `firesAfter` verbatim,
+ * which is the sentence `alloc` would print for that card now. A second vocabulary for the same
+ * condition would be one more thing to drift.
+ *
+ * `--queued` OVERRIDES ONLY THE REASON THE DISPATCHER WAS SHOWN. A dispatcher who read "queued behind
+ * X" and chose to open anyway made that decision about X. If the re-read says queued for a DIFFERENT
+ * reason (a lane that opened in the seconds between), that decision was never made, and it refuses.
+ *
+ * Pure: no disk, no git, no lock. The caller holds the lock.
+ *
+ * @param {object} o
+ * @param {object} o.card        the card the dispatcher was shown (first read)
+ * @param {object|null} o.freshCard  the same brief's card from the re-read under the lock, or null
+ * @param {boolean} o.queued     was --queued passed
+ * @returns {{ok:boolean, why:string|null, blockedBy:object|null}}
+ */
+export function openCasVerdict({ card, freshCard, queued }) {
+  if (!freshCard) {
+    return {
+      ok: false,
+      why: `the card for ${card?.brief ?? 'this brief'} is gone on the re-read under the lock: the board moved between the allocator's read and this open. Run: pandoras-router alloc --limit 99`,
+      blockedBy: null,
+    };
+  }
+  if (!freshCard.firesAfter) return { ok: true, why: null, blockedBy: null };
+  if (queued && card?.firesAfter && card.firesAfter === freshCard.firesAfter) {
+    return { ok: true, why: null, blockedBy: freshCard.blockedBy ?? null };
+  }
+  return { ok: false, why: freshCard.firesAfter, blockedBy: freshCard.blockedBy ?? null };
+}
+
 export const IN_PLACE = 'in-place';
 export const WORKTREE = 'worktree';
 

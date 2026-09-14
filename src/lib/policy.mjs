@@ -92,6 +92,7 @@ export function loadPolicy(root) {
       exclusive: [],
       surfaces: [],
       liveness: null,
+      env: null,
     });
   }
 
@@ -162,6 +163,23 @@ export function loadPolicy(root) {
       const rec = repos.get(o.repo);
       if (!rec) throw new Error(`policy: ownership table names "${o.repo}", which is not in the repos table`);
       rec.owner = o.dispatch === '-' ? null : o.dispatch;
+    }
+  }
+
+  // ENV (Router ENV1, 2026-09-14). A per-repo allowlist of `.env.local` variable NAMES — never
+  // values, only names, and this file never sees a value — that `lane-open` copies into a fresh
+  // worktree. OPTIONAL, in the same shape as `exclusive` and `traps` above: a repo absent from this
+  // table gets today's behaviour, unchanged — the whole file is copied. A repo present here gets
+  // ONLY the named keys; see copyEnvFile in bin/lane-open.mjs for the disk half and what happens to
+  // a listed key the source file lacks. `keys` is a space-separated list read straight off the row.
+  if (/<!--\s*table:\s*env\s*-->/i.test(text)) {
+    for (const e of readTable(text, 'env')) {
+      const rec = repos.get(e.repo);
+      if (!rec) throw new Error(`policy: env table names "${e.repo}", which is not in the repos table`);
+      if (rec.env) throw new Error(`policy: repo "${e.repo}" appears twice in the env table`);
+      const keys = String(e.keys ?? '').trim().split(/\s+/).filter(Boolean);
+      if (!keys.length) throw new Error(`policy: env table has a row for "${e.repo}" with no keys`);
+      rec.env = keys;
     }
   }
 

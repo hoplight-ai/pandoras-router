@@ -28,11 +28,12 @@ From the repo root:
 npm test
 ```
 
-574 assertions across 13 suite files, all passing. 218 of them are marked red-proof by their own
+600 assertions across 14 suite files, all passing. 235 of them are marked red-proof by their own
 suite: each asserts a refusal, or that a weakening turns the suite red, so deleting a guard turns
 them red rather than quietly widening what the tool allows. Each suite prints its own count as it
 runs: the allocator and scope suite reports 137 of its 318 as red-proof, the shell guards 34 of
-50, each fed the exact input that once walked past it, the liveness gate 19 of 42, the lock's
+50, each fed the exact input that once walked past it, the liveness gate 25 of 53, the close
+driver's verify dispatch 10 of 14, each running the real close against a local server, the lock's
 concurrency suite 7 of 10, each racing two real processes, and the scope property suite 5 of 15,
 over six properties at 3,000 generated cases each.
 

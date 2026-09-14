@@ -131,8 +131,12 @@ const FAKE = {
   ok: "console.log('FAKE-BUILD-OK'); process.exit(0);",
   fail: "console.log('compiling 3 files'); console.error('FAKE-BUILD-FAILED src/app.ts(3,7): error TS2322'); process.exit(1);",
   // Starts a grandchild that holds the output pipes open, records both pids, and never exits.
+  // On Windows the grandchild is detached. Every Node process there puts its ordinary children in a
+  // job object that ends them when that Node process dies, so a Node fake's grandchild would die with
+  // a leader-only kill and prove nothing. A detached grandchild sits outside that job, like a build
+  // tool that is not a Node child, and only the tree kill (taskkill /T) reaches it.
   hang: `const { spawn } = require('node:child_process');
-const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });
+const gc = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit', detached: process.platform === 'win32', windowsHide: true });
 fs.writeFileSync(OUT + '.pids', JSON.stringify({ child: process.pid, grandchild: gc.pid }));
 console.log('FAKE-BUILD-HANGING');
 setInterval(() => {}, 1000);`,
@@ -463,9 +467,7 @@ T(`RED-PROOF runBuild: a 1 s limit on a build that never exits is no, ${WIN ? 'n
     assert.match(r.why, /1000 ms limit/);
     assert.ok(r.durationMs >= 1000, `graded after ${r.durationMs} ms, before the limit`);
     assert.ok(r.durationMs < 1000 + 500 + 1000 + 1500, `graded after ${r.durationMs} ms`);
-    // The tree first: this process outlives the build, so only the kill itself can have ended the
-    // grandchild. (In the driver case above the close exits, and on Windows libuv's job object ends
-    // every child of an exiting Node, so there the close's own exit would hide a leader-only kill.)
+    // The tree first, so a kill that reaches only the leader reads as a surviving grandchild.
     await assertTreeGone(w);
     if (WIN) {
       // TerminateProcess leaves an exit code, never a signal name.

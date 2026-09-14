@@ -760,6 +760,44 @@ export function freshBaseVerdict({ containsMainHead, grandfathered, behindBy, ga
 }
 
 /**
+ * THE DRIVER'S READING OF THE FRESH-BASE RULE (GREEN1, 2026-09-14). freshBaseVerdict existed and
+ * the close driver never called it, so a build on a base that predated a neighbour's landing still
+ * graded `green=yes`. The driver now measures one thing before it builds, the output of
+ * `git rev-list --parents <branch>..<base>` (every commit the base has that the branch lacks, each
+ * line a sha followed by its parents), and hands it here.
+ *
+ * An empty list is a branch that contains the base's head. A non-empty list goes through
+ * landingGapVerdict, so the branch's own landing merge is excused and nothing else is, and then
+ * through freshBaseVerdict. `listed` null means git could not answer: `fresh` is null, which the
+ * driver records as a skip, because an unmeasured base is not a fresh one.
+ *
+ * @param {object} o
+ * @param {string|null} o.listed                 rev-list --parents output, or null when git failed
+ * @param {{tip?:string, merge?:string}|null} [o.land]  the lane's LAND record, merge sha resolved
+ * @param {(sha:string)=>boolean} o.isInBranch   is this commit an ancestor of the branch tip
+ * @param {boolean} [o.grandfathered]
+ * @param {string} [o.base]                      the ref name to say in the reason, e.g. main
+ * @returns {{fresh:boolean|null, why:string, missing:string[]}}
+ */
+export function freshBaseFromRevList({ listed, land = null, isInBranch, grandfathered = false, base = 'origin/main' }) {
+  const say = (s) => (base === 'origin/main' ? s : s.split('origin/main').join(base));
+  if (listed === null || listed === undefined) {
+    return { fresh: null, why: say('git could not list the commits on origin/main that the branch lacks, so whether this build is a build of the combined result was not measured'), missing: [] };
+  }
+  const ahead = String(listed).split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+    const [sha, ...parents] = l.split(/\s+/);
+    return { sha, parents };
+  });
+  if (!ahead.length) {
+    const v = freshBaseVerdict({ containsMainHead: true, grandfathered });
+    return { fresh: v.fresh, why: say(v.why), missing: [] };
+  }
+  const gap = landingGapVerdict({ ahead, land, isInBranch });
+  const v = freshBaseVerdict({ containsMainHead: false, grandfathered, behindBy: ahead.length, gap });
+  return { fresh: v.fresh, why: say(v.why), missing: v.fresh ? [] : gap.unexplained };
+}
+
+/**
  * ANCESTRY-LIVE for gate 3's sha form (2026-08-22, pre-cap-raise). Equality was correct at one
  * writer: the site serves your sha or your deploy did not land. At several writers the LAST push
  * wins the alias, so a lane whose work landed fine reads `no` whenever a neighbour deployed after

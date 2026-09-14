@@ -52,7 +52,8 @@ Stated as non-goals, each with the one line of reasoning behind it.
   time. The tool never stores, mints, rotates or distributes one; it only refuses to send a variable
   whose name lacks the `PANDORAS_` prefix.
 - **Sandboxed builds.** The build runs where the close runs, with the close's own permissions. There
-  is no container, no separate user and no network cut.
+  is no container, no separate user and no network cut. The time limit and the output cap bound how
+  long it runs and how much of its output the close holds; they do not bound what it does.
 
 ## The unlock phrase is a protocol, not a secret
 
@@ -76,6 +77,15 @@ Both are under "What this touches on your machine" in the README, and both are d
    worktree by hand leaves its copy behind.
 2. **`close` runs the branch's own build on the dispatcher's machine**, in the lane's checkout.
    That is what a build gate is, and it means a lane's `package.json` runs code where the close runs.
+   The run is bounded, not contained (`src/lib/build.mjs`): `npm` is spawned with two arguments and
+   no shell, in its own process group; after 15 minutes by default, or `PANDORAS_BUILD_TIMEOUT_MS`
+   when set, the whole group gets SIGTERM and then SIGKILL 2 seconds later, and the gate records
+   `no`; only the last 64 KB of combined output is kept, so a build that prints without end cannot
+   exhaust the close's memory. A build that exits 0 inside the limit is the only `yes`. npm missing
+   from PATH is `skip`. Before any of that, a branch that lacks commits on main other than its own
+   landing merge grades `no` and the build is not started. None of these limits stops what the
+   script does while it runs: it can still read files, open the network or spawn a process that
+   leaves the group.
 
 The README's section on what this touches describes the guards as they are now: Node only, failing
 closed on input they cannot read, and an unlock phrase with no default.

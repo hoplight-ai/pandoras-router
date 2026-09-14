@@ -44,6 +44,19 @@ import { laneOpenPlan, openRefusal, openCasVerdict, resumeVerdict, IN_PLACE } fr
 import { laneKey } from '../lib/lanes.mjs';
 import { withLock } from '../lib/lock.mjs';
 import { repoPolicy } from '../lib/policy.mjs';
+import { resolveNpm } from '../lib/build.mjs';
+
+/**
+ * How `--install` runs `npm ci`: through the same no-shell resolver the build gate uses, so it works
+ * on Windows, where the bare name finds npm.cmd and Node will not start that without a shell.
+ *
+ * @param {Parameters<typeof resolveNpm>[0]} [o]
+ * @returns {{command:string|null, args:string[], tried:string[]}}
+ */
+export function installCommand(o) {
+  const r = resolveNpm(o);
+  return { command: r.command, args: r.command ? [...r.args, 'ci'] : [], tried: r.tried };
+}
 
 // THE WORKSPACE ROOT is the directory holding `_handoffs/` and your repos. It is NEVER the
 // package's own install location, so it comes from $PANDORAS_ROOT or the current directory.
@@ -451,7 +464,9 @@ function main() {
   if (deps.run) {
     console.log(`  install    npm ci in ${card.checkout} ...`);
     try {
-      execFileSync('npm', ['ci'], { cwd: checkoutDir, stdio: 'inherit', timeout: 20 * 60_000 });
+      const npmCi = installCommand();
+      if (!npmCi.command) throw new Error(`npm could not be found; looked at ${npmCi.tried.join(', ')}`);
+      execFileSync(npmCi.command, npmCi.args, { cwd: checkoutDir, stdio: 'inherit', timeout: 20 * 60_000, shell: false, windowsHide: true });
       console.log('  install    OK');
     } catch (e) {
       console.log(`  install    FAILED (${String(e.message).slice(0, 160)}). The lane is open and correct; run \`npm ci\` in the checkout by hand.`);

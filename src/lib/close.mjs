@@ -26,6 +26,7 @@
 // the status-word sweep (via lib/verdict.mjs) so overrideReportStatusWord below can never rewrite a
 // line that parser does not itself read as the status. See overrideReportStatusWord's own comment.
 import { findStatus, STATUS_WORDS } from './report-check.mjs';
+import { STRING_YES_CAVEAT } from './liveness.mjs';
 
 export const ABSENT = null;
 
@@ -161,7 +162,11 @@ export function surfaceReach(touched, surfaces, repo = 'this repo') {
  * Precedence, and each step is a different fact about the deployment:
  *
  *   yes   some probed url served the proof string. The string is already known novel in this
- *         branch's diff, so this cannot pass on stale bytes.
+ *         branch's diff, which narrows what a match can mean but does not prove the served build
+ *         is the merged commit: a cached response, a stale build that happens to carry the string,
+ *         or an unrelated route that echoes it all read the same from here. So the yes labels
+ *         itself best-effort evidence (STRING_YES_CAVEAT, shared with lib/liveness.mjs); the sha
+ *         form's yes is the one that says deployment identity.
  *   skip  a probe hit an auth wall (401/403) and no other probe found the string. ONE WALLED
  *         URL IS ENOUGH, even beside a dozen that answered 200, and that ordering was got wrong
  *         first: a lane changed one gated page alongside twelve public files, and grading the
@@ -182,7 +187,7 @@ export function liveStringVerdict({ results, proof, mode, dropped = 0 }) {
   const r = results ?? [];
   const tail = dropped ? ` NOTE: ${dropped} further changed file(s) were not probed — this close caps the probe list, and the cap is printed rather than hidden.` : '';
   const hit = r.find((x) => x.hasProof);
-  if (hit) return { value: 'yes', why: `${hit.url} is serving "${proof}", a string this branch introduced.${tail}` };
+  if (hit) return { value: 'yes', why: `${hit.url} is serving "${proof}", a string this branch introduced. ${STRING_YES_CAVEAT}${tail}` };
   const served = r.filter((x) => x.status === 200);
   const walled = r.filter((x) => x.status === 401 || x.status === 403);
   if (walled.length)
@@ -678,8 +683,8 @@ export function freshBaseVerdict({ containsMainHead, grandfathered, behindBy, ga
  */
 export function liveShaVerdict({ served, sha, isAncestor, servedKnown }) {
   if (!served) return { value: 'no', why: 'the deployed surface answered without a release field, so the build cannot identify itself' };
-  if (served === sha) return { value: 'yes', why: `release=${served} matches the branch head exactly` };
-  if (isAncestor) return { value: 'yes', why: `release=${served.slice(0, 8)} CONTAINS this branch's head ${sha.slice(0, 8)} — a later lane deployed on top of this one, which is the normal case with concurrent writers. This lane's work is in the live build.` };
+  if (served === sha) return { value: 'yes', why: `deployment identity: release=${served} matches the branch head exactly. The deployment named its own commit, so this cannot have passed on stale bytes.` };
+  if (isAncestor) return { value: 'yes', why: `deployment identity: release=${served.slice(0, 8)} CONTAINS this branch's head ${sha.slice(0, 8)} — a later lane deployed on top of this one, which is the normal case with concurrent writers. This lane's work is in the live build, and the deployment named its own commit, so this cannot have passed on stale bytes.` };
   if (servedKnown === false) return { value: 'skip', why: `SKIP: the served release ${served.slice(0, 8)} is not a commit this checkout knows, so ancestry could not be measured. Run \`git fetch origin\` in the repo and re-close. Nothing was measured, and a skip is not a pass.` };
   return { value: 'no', why: `release=${served.slice(0, 8)} neither matches nor contains this branch's head ${sha.slice(0, 8)} — the alias is serving a build without this lane's work. Check for a stacked deploy before re-firing anything.` };
 }

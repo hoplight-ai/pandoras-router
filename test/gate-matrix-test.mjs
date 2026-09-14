@@ -239,20 +239,27 @@ T('RED-PROOF recorded-only: the driver writes the fixed value the matrix claims,
   }
 });
 
-T('refusals: the three close refusals are named in doneReportRefusal and this driver passes doneHonestWarn as false', () => {
+T('refusals: the three close refusals are named in doneReportRefusal, and the driver reaches them only through closeReportRefusal', () => {
   const body = sliceFunction(libSrc, 'doneReportRefusal', 'lib');
   for (const n of matrix.close_refusals.names) assert.ok(body.includes(`'${n}'`), `doneReportRefusal no longer names ${n}`);
-  assert.ok(/doneHonestWarn: false/.test(binSrc), 'the driver now supplies doneHonestWarn; update close_refusals.note');
+  assert.ok(/closeReportRefusal\(\{/.test(binSrc), 'the driver no longer calls closeReportRefusal; update close_refusals');
+  assert.ok(!/doneReportRefusal\(\{/.test(binSrc), 'the driver calls doneReportRefusal directly again, bypassing the presence and report-check wiring');
 });
 
-T('refusals: the matrix says the refusals are inert here, and the driver\'s call still omits present, which is why', () => {
-  // doneReportRefusal returns ok at once unless handed `present: true`. The driver's call does not
-  // pass it, so none of the three refusals can fire. When someone fixes the call this goes red, and
-  // close_refusals.note and docs/THREAT-MODEL.md must be rewritten to say the refusals are live.
+T('RED-PROOF refusals: the driver tells the refusal a report is present, asks whatever the grade, and the matrix says the refusals are live', () => {
+  // DRIVER1, 2026-09-14. doneReportRefusal returns ok at once unless handed `present: true`, and the
+  // driver's old call omitted it, so none of the three refusals could fire. This asserts the wiring
+  // that makes them live, so dropping presence, the honesty flag, or asking only on a DONE grade turns
+  // the suite red, and the prose documents cannot go back to calling the refusals inert.
   assert.match(sliceFunction(libSrc, 'doneReportRefusal', 'lib'), /if \(!present\) return \{ ok: true/, 'doneReportRefusal no longer short-circuits on a missing present flag');
-  const call = sliceBetween(binSrc, ['refusal = doneReportRefusal({', '});'], 'bin');
-  assert.ok(!/\bpresent\b/.test(call), 'the driver now passes present to doneReportRefusal; the refusals can fire, so update close_refusals.note and docs/THREAT-MODEL.md');
-  assert.match(matrix.close_refusals.note, /None of the three can fire/);
+  const wiring = sliceFunction(libSrc, 'closeReportRefusal', 'lib');
+  assert.match(wiring, /present: true/, 'closeReportRefusal no longer tells doneReportRefusal a report is present');
+  assert.match(wiring, /statusFound:/, 'closeReportRefusal no longer passes statusFound');
+  assert.match(wiring, /doneHonestWarn: by\['done-honest'\]/, 'closeReportRefusal no longer passes report-check\'s done-honest answer');
+  const ask = sliceBetween(binSrc, ['// ---- may the close proceed', '// ---- print'], 'bin');
+  assert.ok(!/graded\.status/.test(ask), 'the driver asks the refusal only for some grades again; the private close asks whenever the report is on disk');
+  assert.match(matrix.close_refusals.note, /All three can fire/);
+  assert.ok(!/none of them fires/i.test(read('docs/THREAT-MODEL.md')), 'docs/THREAT-MODEL.md still calls the refusals inert');
 });
 
 // ── the prose documents point at files that exist ────────────────────────────────────────────

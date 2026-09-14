@@ -38,6 +38,7 @@ import {
   doneReportRefusal, overrulesReportCheck, overrulesVocabulary, vocabularyFindingOverruled,
   gradedReportRename, overrideReportStatusWord, walkStartFor, removalEligible,
   classifyPartialKind, partialStatusLabel, NO_DEPLOY_PROBE,
+  closeReportRefusal, inScopeVerdict, scopeDiffPlan,
 } from '../src/lib/close.mjs';
 import { installPlan } from '../src/bin/lane-open.mjs';
 
@@ -1201,6 +1202,91 @@ T('report: the refusals are ordered, so the first missing thing is the one the c
     present: true, statusFound: false, statusWord: null, evidencePresent: false, doneHonestWarn: true,
   });
   assert.equal(v.condition, 'no-status-word');
+});
+
+// ---------------------------------------------------------------- the close driver's own report refusal
+// DRIVER1, 2026-09-14. The three refusals above were tested against doneReportRefusal alone, and the
+// close driver called it without `present: true`, so on a real close none of them could fire. These
+// go through closeReportRefusal, the function src/bin/close.mjs calls, with real report text, so a
+// driver that stops telling the refusal a report is there turns them red.
+const reportText = (block, prose = 'The fixture lane shipped its one change.') =>
+  ['# Fixture lane report', '', prose, '', '```', ...block, '```', ''].join('\n');
+const REPORT_FILE = '_handoffs/done-2026-09-03-fixture1.md';
+const EVIDENCE = 'Evidence: npm test, 5/5 pass, 2026-09-03 (counted)';
+
+T('RED-PROOF driver report: a report on the bridge with no STATUS word aborts the close', () => {
+  const v = closeReportRefusal({ file: REPORT_FILE, text: reportText(['lane: fixture1 | 2026-09-03', EVIDENCE, '- one receipt (counted)']) });
+  assert.equal(v.ok, false, 'a report with no STATUS word went through the driver unrefused');
+  assert.equal(v.condition, 'no-status-word');
+});
+
+T('RED-PROOF driver report: a DONE report with no Evidence line aborts the close', () => {
+  const v = closeReportRefusal({ file: REPORT_FILE, text: reportText(['lane: fixture1 | 2026-09-03 | STATUS: DONE', '- one receipt (counted)']) });
+  assert.equal(v.ok, false, 'a DONE with no Evidence line went through the driver unrefused');
+  assert.equal(v.condition, 'done-without-evidence');
+});
+
+T('RED-PROOF driver report: a DONE report beside an unanswered honesty flag aborts the close, and the overrule line releases it', () => {
+  const block = ['lane: fixture1 | 2026-09-03 | STATUS: DONE', EVIDENCE, '- the deploy step was skipped (counted)'];
+  const v = closeReportRefusal({ file: REPORT_FILE, text: reportText(block) });
+  assert.equal(v.ok, false, 'a DONE naming a skipped step went through the driver unrefused');
+  assert.equal(v.condition, 'done-honest-unaddressed');
+  assert.match(v.why, /line \d+:/, 'the refusal quotes the flagged line');
+  const answered = reportText(block) + '\noverruled: report-check flagged "skipped" in _handoffs/done-2026-09-03-fixture1.md; the step is out of this lane\n';
+  assert.equal(closeReportRefusal({ file: REPORT_FILE, text: answered }).ok, true);
+});
+
+T('driver report: a clean DONE, a PARTIAL with no Evidence, a report not written yet and a consumed brief are all left alone', () => {
+  assert.equal(closeReportRefusal({ file: REPORT_FILE, text: reportText(['lane: fixture1 | 2026-09-03 | STATUS: DONE', EVIDENCE, '- one receipt (counted)']) }).ok, true);
+  assert.equal(closeReportRefusal({ file: REPORT_FILE, text: reportText(['lane: fixture1 | 2026-09-03 | STATUS: PARTIAL', '- one receipt (counted)']) }).ok, true,
+    'the Evidence rule is about DONE; a PARTIAL is not refused for lacking one');
+  assert.equal(closeReportRefusal({ file: REPORT_FILE, text: null }).ok, true, 'closing before writing the report is the normal order');
+  const brief = closeReportRefusal({ file: REPORT_FILE, text: '# Web X1: a brief\n\n## RUN THIS IN\n\n- Folder: web\n' });
+  assert.equal(brief.ok, true, 'a consumed brief is not a lane report and is never refused as one');
+  assert.match(brief.note, /not a lane report/);
+});
+
+// ---------------------------------------------------------------- the close driver's in-scope grade
+// DRIVER1, 2026-09-14. Two readings the gate matrix found in src/bin/close.mjs: a Touches: none lane
+// that committed files graded n/a, a pass; and a branch already merged into main graded skip,
+// because its merge base had collapsed onto its own tip and the diff it measured was empty.
+T('RED-PROOF driver in-scope: Touches: none, then files committed, grades no and names every path', () => {
+  const v = inScopeVerdict({ touched: ['src/a.mjs', 'docs/b.md'], scope: [], declaredNone: true });
+  assert.equal(v.value, 'no', 'a lane that promised no files and committed two graded a pass');
+  assert.deepEqual(v.breaches, ['src/a.mjs', 'docs/b.md']);
+  assert.match(v.note, /src\/a\.mjs/);
+  assert.match(v.note, /docs\/b\.md/);
+  assert.match(v.note, /Touches: none/);
+});
+
+T('driver in-scope: Touches: none with nothing committed stays a clean yes, and declared or undeclared scopes grade as before', () => {
+  assert.equal(inScopeVerdict({ touched: [], scope: [], declaredNone: true }).value, 'yes');
+  assert.equal(inScopeVerdict({ touched: ['src/a.mjs'], scope: ['src'], declaredNone: false }).value, 'yes');
+  assert.equal(inScopeVerdict({ touched: ['lib/a.mjs'], scope: ['src'], declaredNone: false }).value, 'no');
+  assert.equal(inScopeVerdict({ touched: [], scope: ['src'], declaredNone: false }).value, 'skip');
+  assert.equal(inScopeVerdict({ touched: ['anything.ts'], scope: [], declaredNone: false }).value, 'n/a', 'an undeclared lane held the repo alone');
+});
+
+T('RED-PROOF driver in-scope: a branch already merged into main measures its own commits from the base recorded at OPEN, not the collapsed merge base', () => {
+  const p = scopeDiffPlan({ recordedBase: 'aaaa111', mergeBase: 'ffff999', branchTip: 'ffff999' });
+  assert.equal(p.from, 'aaaa111', 'a merged branch diffed from its own tip, which measures nothing');
+  assert.equal(p.method, 'walk');
+  assert.match(p.note, /base recorded at open/i);
+});
+
+T('driver in-scope: an unmerged branch keeps the merge-base diff, so main brought into the lane never names a neighbour\'s files', () => {
+  const p = scopeDiffPlan({ recordedBase: 'aaaa111', mergeBase: 'bbbb222', branchTip: 'cccc333' });
+  assert.equal(p.method, 'diff');
+  assert.equal(p.from, 'bbbb222');
+});
+
+T('RED-PROOF driver in-scope: merged with no base recorded at OPEN falls back to the merge base, and the note says the measure is empty', () => {
+  const p = scopeDiffPlan({ recordedBase: null, mergeBase: 'ffff999', branchTip: 'ffff999' });
+  assert.equal(p.method, 'diff');
+  assert.equal(p.from, 'ffff999');
+  assert.match(p.note, /no base was recorded at open/i);
+  assert.equal(scopeDiffPlan({ recordedBase: 'aaaa111', mergeBase: null, branchTip: 'cccc333' }).method, 'walk', 'no merge base, but a recorded one, still measures');
+  assert.equal(scopeDiffPlan({ recordedBase: null, mergeBase: null, branchTip: 'cccc333' }).method, 'none');
 });
 
 // ---------------------------------------------------------------- atomic patch application

@@ -122,6 +122,11 @@ T('B3: `rm -f one-file` and `rm -r dir` (no force) stay ungated', () => {
   allow(IRREVERSIBLE, bash('rm -f dist/bundle.js'));
   allow(IRREVERSIBLE, bash('rm -r build-output'));
 });
+T('B3: a recursive rm and a separate forced rm on one line are two ordinary deletes, not one forced recursive one', () => {
+  allow(IRREVERSIBLE, bash('rm -r build-output && rm -f dist/bundle.js'));
+  allow(IRREVERSIBLE, bash('rm -f a.log; rm -r tmp-dir'));
+  deny(IRREVERSIBLE, bash('rm -r build-output && rm -rf dist')); // the second rm alone is still refused
+});
 
 // ---------------------------------------------------------------- B4: other force-push spellings
 T('RED-PROOF B4: `git push origin +main` is refused', () => deny(IRREVERSIBLE, bash('git push origin +main')));

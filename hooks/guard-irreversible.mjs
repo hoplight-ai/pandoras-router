@@ -178,17 +178,17 @@ if (TOOL.includes('apply_migration')) {
   if (git('clean +[^|;&]*-[a-z]*f').test(CMD)) DANGER = true;
   if (git('config +[^|;&]*alias\\.').test(CMD)) DANGER = true;
   if (/bfg|--strip-blobs|--replace-text/.test(CMD)) DANGER = true;
-  // destructive filesystem: any recursive flag AND any force flag on one rm, in any spelling
+  // destructive filesystem: a recursive flag AND a force flag on the same rm, in any spelling
   // `rm` counts wherever it is not the tail of another word: at the start, after `;`, `&&`, `|`,
   // a quote (`bash -c "rm -rf x"`) or a path (`/bin/rm`).
   //
-  // The shell collected every rm segment with `grep -o` and tested the recursive flag and the
-  // force flag against the whole collection, so `rm -r a && rm -f b` is refused as well as
-  // `rm -rf a`. Kept as it was: it can only refuse more, and the port promises identical verdicts.
+  // Each rm segment is judged on its own. The shell version pooled the flags of every rm on the
+  // line, so a recursive delete followed by an unrelated forced single-file delete read as one
+  // forced recursive delete and was refused. A guard that refuses two ordinary commands teaches
+  // people to reach for the unlock phrase, which is worse than the delete it was meant to stop.
   const rmSegs = [...CMD.matchAll(/(^|[^A-Za-z0-9_-])rm +[^|;&]*/g)].map((m) => m[0]);
-  if (rmSegs.length
-      && rmSegs.some((s) => /( |^)(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)( |$)/.test(s))
-      && rmSegs.some((s) => /( |^)(-[a-zA-Z]*f[a-zA-Z]*|--force)( |$)/.test(s))) DANGER = true;
+  if (rmSegs.some((s) => /( |^)(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)( |$)/.test(s)
+      && /( |^)(-[a-zA-Z]*f[a-zA-Z]*|--force)( |$)/.test(s))) DANGER = true;
   // schema against a live database
   if (/(db push|db reset|migration up|migrate deploy|(projects|branches) +(delete|rm))/.test(CMD)) DANGER = true;
   if (/psql[^|;&]*(drop|truncate|delete +from)/i.test(CMD)) DANGER = true;

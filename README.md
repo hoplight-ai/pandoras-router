@@ -44,8 +44,9 @@ dependencies. Every file under `src/` and `hooks/` starts with `// @ts-check`, s
 Node types available checks it as you type.
 
 Most measurements quoted in the code's comments are from the tool's first four weeks in use on
-one operator's board: 511 lane closes across 25 working days, an average of 20 a day and a peak
-of 47, every one graded by these gates. That board is where each gate earned its place.
+one operator's board: 511 lane closes across the 25 days from 18 August to the day it was
+published, 13 September 2026, an average of 20 a day and a peak of 47, every one graded by these
+gates. That board is where each gate earned its place.
 
 Now build a throwaway workspace out of `examples/`. A workspace is any directory holding a
 `_handoffs/` bridge and your repos:
@@ -231,7 +232,7 @@ reading for its own sake. This project keeps an append-only ledger instead, beca
 lane's declared scope and its open timestamp recorded at the moment of dispatch, which no PR or CI
 fact carries.
 
-Across a source-level read of 13 comparable tools, none did both scope-before-dispatch and
+Of the fourteen tools compared, none did both scope-before-dispatch and
 verify-after, and none checked that a merged change is actually live at a URL. That gap, rather
 than either half on its own, is what this fills.
 

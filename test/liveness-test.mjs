@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import { probeLiveness, gradeLiveness, livenessHeaders, LIVE_YES, LIVE_NO, LIVE_SKIPPED } from '../src/lib/liveness.mjs';
 import { parseLiveness } from '../src/lib/policy.mjs';
+import { liveStringVerdict, liveShaVerdict } from '../src/lib/close.mjs';
 
 const tests = [];
 const T = (name, fn) => tests.push({ name, fn });
@@ -236,6 +237,50 @@ T('gradeLiveness is pure and can be asserted with no probe at all', () => {
   assert.equal(gradeLiveness({ status: 200, body: 'y', expect: 'x', url: 'u' }).value, LIVE_NO);
   assert.equal(gradeLiveness({ status: 500, body: '', expect: null, url: 'u' }).value, LIVE_NO);
   assert.equal(gradeLiveness({ status: 0, body: '', expect: null, url: 'u', error: 'boom' }).value, LIVE_SKIPPED);
+});
+
+// ---------------------------------------------------------------- a verdict names its own strength
+//
+// The sha form (a deployment echoing its own commit) is the only proof that cannot pass on stale
+// bytes. The string form can be satisfied by a cached response, a stale build that happens to carry
+// the string, or an unrelated route. The comments said so; reviewers asked that the VERDICT say so,
+// where a reader grades. The value never changes — yes stays yes — only the sentence beside it.
+
+T('the string form\'s yes labels itself best-effort evidence and names what it did not prove', () => {
+  const carried = gradeLiveness({ status: 200, body: 'build-abc123', expect: 'build-abc123', url: 'https://example.test/' });
+  assert.equal(carried.value, LIVE_YES, 'the value is untouched');
+  assert.match(carried.why, /best-effort evidence/);
+  assert.match(carried.why, /does not prove that the served build is the merged commit/);
+  assert.match(carried.why, /carried "build-abc123"/, 'the old sentence survives inside the new one');
+  const bare = gradeLiveness({ status: 200, body: 'anything', expect: null, url: 'https://example.test/' });
+  assert.equal(bare.value, LIVE_YES);
+  assert.match(bare.why, /best-effort evidence/);
+  assert.match(bare.why, /does not prove that the served build is the merged commit/);
+});
+
+T('the close\'s string verdict yes carries the same best-effort label', () => {
+  const r = liveStringVerdict({ results: [{ url: 'https://x/b.mjs', status: 200, hasProof: true }], proof: 'p', mode: 'files' });
+  assert.equal(r.value, 'yes');
+  assert.match(r.why, /best-effort evidence/);
+  assert.match(r.why, /does not prove that the served build is the merged commit/);
+  assert.match(r.why, /a string this branch introduced/, 'the novelty sentence survives');
+});
+
+T('the sha form\'s yes says deployment identity, on both the exact and the ancestry branch', () => {
+  const exact = liveShaVerdict({ served: 'abc1234567', sha: 'abc1234567', isAncestor: false, servedKnown: null });
+  assert.equal(exact.value, 'yes');
+  assert.match(exact.why, /deployment identity/);
+  const anc = liveShaVerdict({ served: 'def4567890', sha: 'abc1234567', isAncestor: true, servedKnown: true });
+  assert.equal(anc.value, 'yes');
+  assert.match(anc.why, /deployment identity/);
+  assert.match(anc.why, /CONTAINS/, 'the ancestry sentence survives');
+});
+
+T('RED-PROOF the string label never leaks onto a no or a skip, and the sha label never onto a string yes', () => {
+  assert.doesNotMatch(gradeLiveness({ status: 200, body: 'old', expect: 'new', url: 'u' }).why, /best-effort evidence/);
+  assert.doesNotMatch(gradeLiveness({ status: 0, body: '', expect: 'x', url: 'u', error: 'boom' }).why, /best-effort evidence/);
+  assert.doesNotMatch(gradeLiveness({ status: 200, body: 'x', expect: 'x', url: 'u' }).why, /deployment identity/);
+  assert.doesNotMatch(liveShaVerdict({ served: 'old4567890', sha: 'abc1234567', isAncestor: false, servedKnown: true }).why, /deployment identity/);
 });
 
 // ---------------------------------------------------------------- run

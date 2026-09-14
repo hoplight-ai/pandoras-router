@@ -58,6 +58,17 @@ export const LIVE_SKIPPED = 'skipped';
 
 const NOT_A_PASS = 'Nothing was measured, and a skip is not a pass.';
 
+/**
+ * THE STRING FORM GRADES ITSELF. A marker found in a body is best-effort evidence: a cached
+ * response, a stale build that happens to carry the string, or an unrelated route that echoes it
+ * all read the same from here. Only a deployment echoing its own commit (the sha form, or the
+ * header form below) proves that the served build IS the merged commit. The verdict value does
+ * not change — yes is yes — but every string `yes` says which kind of yes it is, where a reader
+ * grades, not only in a comment nobody opens. Exported so the close's own string verdict can say
+ * the identical sentence rather than a paraphrase that drifts.
+ */
+export const STRING_YES_CAVEAT = 'This is best-effort evidence: a body match does not prove that the served build is the merged commit (a cached response, a stale build carrying the string, or an unrelated route reads the same); only a sha or header echo of the commit proves which build is serving.';
+
 /** Only environment variables whose names start with this may be sent by a probe. */
 export const DEFAULT_ENV_PREFIX = 'PANDORAS_';
 
@@ -144,10 +155,10 @@ export function gradeLiveness({ status, body, expect, url, error = null }) {
     };
   }
   if (!expect) {
-    return { value: LIVE_YES, why: `${url} answered 200, and this repo's policy asks for nothing more than a 200.` };
+    return { value: LIVE_YES, why: `${url} answered 200, and this repo's policy asks for nothing more than a 200. ${STRING_YES_CAVEAT}` };
   }
   if (String(body ?? '').includes(expect)) {
-    return { value: LIVE_YES, why: `${url} answered 200 and carried "${expect}".` };
+    return { value: LIVE_YES, why: `${url} answered 200 and carried "${expect}". ${STRING_YES_CAVEAT}` };
   }
   return {
     value: LIVE_NO,

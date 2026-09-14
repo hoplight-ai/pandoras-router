@@ -1707,6 +1707,22 @@ T('lanes: a CLOSE with no OPEN still produces a row rather than being dropped', 
   assert.equal(rows[0].repo, '?');
 });
 
+// ---------------------------------------------------------------- COLUMNS1: findings / side-files
+T('lanes: a CLOSE with findings and side-files round-trips both fields', () => {
+  const rows = parseLanes([
+    'OPEN | col1 | web | col1-x | web-col1 | 5173 | done-c.md | app | dispatch-lane-col1 | 2026-09-14T04:00:00Z',
+    'CLOSE | col1 | DONE | yes | yes | yes | yes | yes | 2026-09-14T06:00:00Z |  | - | yes | - | - | yes | no',
+  ].join('\n'));
+  assert.equal(rows[0].findings, 'yes');
+  assert.equal(rows[0].sideFiles, 'no');
+});
+
+T('RED-PROOF lanes: a CLOSE written before findings/side-files existed parses both as -, never as a pass', () => {
+  const rows = parseLanes('CLOSE | ghost2 | DONE | yes | yes | yes | yes | yes | 2026-08-18T06:00:00Z |');
+  assert.equal(rows[0].findings, '-');
+  assert.equal(rows[0].sideFiles, '-');
+});
+
 // ---------------------------------------------------------------- Touches: none
 T('briefs: `Touches: none` is an empty scope, not a missing one', () => {
   assert.deepEqual(scopeTokens('Touches: none'), []);

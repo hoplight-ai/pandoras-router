@@ -98,7 +98,7 @@
     },
     {
       "name": "findings",
-      "column": null,
+      "column": "findings",
       "enforced_by": "close",
       "verdicts": ["yes", "no", "n/a"],
       "external_dependency": "filesystem",
@@ -108,11 +108,11 @@
       ],
       "what_it_proves": "Every FINDING: line in the lane's own report names a fix, a valid size and an owner, and no small finding is handed to the human owner.",
       "what_it_does_not_prove": "That the finding is real or the fix is right; the gate polices the shape of the line, never its content.",
-      "note": "No ledger column: recordClose in src/lib/lanes.mjs has no field for this gate, so a failing value survives only inside the CLOSE row's reason text. n/a is written when the report is not on disk yet, which is the normal order for a lane closing before it writes up."
+      "note": "Ledger column `findings` (Router COLUMNS1, 2026-09-14), appended after `kind`; a line written before that reads '-'. n/a is written when the report is not on disk yet, which is the normal order for a lane closing before it writes up."
     },
     {
       "name": "no-side-files",
-      "column": null,
+      "column": "side-files",
       "enforced_by": "close",
       "verdicts": ["yes", "no", "skip", "n/a"],
       "external_dependency": "filesystem",
@@ -122,7 +122,7 @@
       ],
       "what_it_proves": "No REFERENCE-, SWEEP- or TRIAGE- file modified on the bridge between the lane's OPEN stamp and now can be attributed to this lane by its body naming the lane or the brief title, or by the lane's own report naming it.",
       "what_it_does_not_prove": "That no side file was written at all: a matching file in the window that none of the attribution tests tie to this lane prints a warning and passes.",
-      "note": "No ledger column, same as findings. This driver passes no worktreeDiffPaths, so the attribution test that reads the lane's branch diff never fires here; only the body and report tests do. A Side-file: allowed line in the brief header makes the gate n/a, and a lane with no recorded open time reads skip."
+      "note": "Ledger column `side-files` (Router COLUMNS1, 2026-09-14), appended after `kind`; a line written before that reads '-'. This driver passes no worktreeDiffPaths, so the attribution test that reads the lane's branch diff never fires here; only the body and report tests do. A Side-file: allowed line in the brief header makes the gate n/a, and a lane with no recorded open time reads skip."
     },
     {
       "name": "report-free",
@@ -224,7 +224,7 @@
   "ledger": {
     "$comment": "The CLOSE record as recordClose writes it. The RECORD FORMS comment at the top of src/lib/lanes.mjs lists the columns through roadmap and omits kind; the HEADER that file writes into a fresh LANES.md stops at owner-way. recordClose is the authority, and the matrix test reads the comment line and then checks recordClose for the appended field.",
     "columns_from_comment": ["lane", "status", "merged", "green", "live", "renamed", "report-free", "ISO", "reason", "owner-way", "in-scope", "roadmap"],
-    "columns_appended_by_recordClose": ["kind"],
-    "gate_value_columns": ["merged", "green", "live", "renamed", "report-free", "owner-way", "in-scope", "roadmap"]
+    "columns_appended_by_recordClose": ["kind", "findings", "side-files"],
+    "gate_value_columns": ["merged", "green", "live", "renamed", "report-free", "owner-way", "in-scope", "roadmap", "findings", "side-files"]
   }
 }

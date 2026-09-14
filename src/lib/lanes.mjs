@@ -21,6 +21,12 @@
 // (gate 6, gated repos only, added 2026-08-18) sits LAST so every line written before it still
 // parses; an absent field reads as '-', never as a pass.
 //
+// `findings` and `side-files` (Router COLUMNS1, 2026-09-14) sit after `kind`, same convention as
+// every other appended field: every line written before them parses unchanged and reads as '-' for
+// both. They carry the findings and no-side-files close gates' own verdicts as literal
+// yes/no/skip/n/a, so a failing gate is visible as a ledger field instead of surviving only inside
+// the CLOSE row's reason text. See docs/gates.json.
+//
 // THE `scope` FIELD IS WHY A SECOND WRITER SLOT IS REAL. A claim line has four fields and
 // none of them is a file scope, so an allocator that only reads CLAIMS.md must treat every open
 // lane as holding the whole repo — which is safe, and which makes a capacity of 2 unusable the
@@ -138,8 +144,12 @@ export function recordClose(root, r) {
   // before it parses unchanged and reads as '-'. It is `scope` or `clerical` on a PARTIAL close,
   // and '-' on a DONE (or BLOCKED, or a pre-DELTA1 PARTIAL nobody has regraded yet) — a '-' here
   // means "not classified", never "clerical by default". See lib/close.mjs's classifyPartialKind.
+  //
+  // `findings` and `side-files` (Router COLUMNS1, 2026-09-14) sit after `kind`: the findings and
+  // no-side-files gates' own literal verdicts, appended so every older line still parses and reads
+  // '-' for both.
   return append(root, [
-    'CLOSE', r.lane, r.status, r.merged, r.green, r.live, r.renamed, r.reportFree, r.stamp, r.reason ?? '', r.ownerWay ?? '-', r.inScope ?? '-', r.roadmap ?? '-', r.kind ?? '-',
+    'CLOSE', r.lane, r.status, r.merged, r.green, r.live, r.renamed, r.reportFree, r.stamp, r.reason ?? '', r.ownerWay ?? '-', r.inScope ?? '-', r.roadmap ?? '-', r.kind ?? '-', r.findings ?? '-', r.sideFiles ?? '-',
   ]);
 }
 
@@ -177,6 +187,11 @@ export function parseLanes(text) {
         // recordKind below) written AFTER this CLOSE line for the same lane overrides it — that is
         // how the regrade backfills a historical row without rewriting the line that is already here.
         kind: p[13] && p[13] !== '-' ? p[13] : null,
+        // `findings` and `side-files` (Router COLUMNS1, 2026-09-14): the two close gates' own
+        // verdicts. A line written before this change has neither field; both read '-', the same
+        // "gate did not exist yet" convention as every other appended CLOSE column.
+        findings: p[14] ?? '-',
+        sideFiles: p[15] ?? '-',
       });
       byLane.set(p[1], rec);
     } else if (p[0] === 'LAND' && p.length >= 9) {

@@ -54,7 +54,7 @@ const server = http.createServer((req, res) => {
   res.writeHead(route.status ?? 200, route.headers ?? { 'content-type': 'application/json' });
   res.end(route.body ?? '');
 });
-await new Promise((r) => server.listen(0, '127.0.0.1', r));
+await new Promise((r) => server.listen(0, '127.0.0.1', () => r(null)));
 const PORT = /** @type {import('node:net').AddressInfo} */ (server.address()).port;
 const BASE = `http://127.0.0.1:${PORT}`;
 

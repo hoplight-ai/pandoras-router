@@ -39,9 +39,20 @@ by path comparison (`src/lib/scope.mjs`), never by judgment.
 `deploy` is one of `push` (pushing main deploys), `push+fns` (functions ship by a separate command
 first, then push), `cli` (push deploys nothing; a command does), `none`.
 
-`verify` is how a close proves the deploy: `sha:<path>:<jsonField>` (the deployment echoes its own
-commit — the only form that cannot pass on stale bytes), `string` (a proof string must appear on a
-served page), `script:<name>`, or `none`.
+`verify` is how a close proves the deploy, and the close runs exactly the form named here, never
+another one in its place:
+
+* `sha:<path>:<jsonField>` — the url plus path answers JSON whose field names a commit containing
+  the lane's commit. Cannot pass on stale bytes.
+* `header:<path>:<headerName>` — the same echo, read from one response header.
+* `string` — the repo's `liveness` row below: its url must answer 200 and carry its `expect`
+  string. Best-effort evidence.
+* `script:<name>` — `npm run <name>` in the lane's checkout; the exit code is the grade.
+* `none` — nothing to prove; the gate records `n/a`.
+
+Any other value refuses to load, and the error lists these five. When a sha or header probe cannot
+reach its endpoint, the gate records skip or no with the reason; it never falls back to the string
+probe. The sha and header forms take auth and timeout from the repo's `liveness` row when it has one.
 
 <!-- table: repos -->
 

@@ -117,7 +117,7 @@ An agent says it finished. `close` finds out. The shipped driver measures seven 
 |---|---|
 | `merged` | every path the branch touched is byte-identical on main, compared blob by blob rather than by git ancestry, because a squash merge throws the fingerprints away |
 | `green` | `npm run build` in the lane's own checkout exited 0 |
-| `live` | the deployed surface was asked over HTTP and answered with what the policy asked for (see below for how strong that proof is) |
+| `live` | the proof the repo's `verify` policy names ran and passed: a commit echo, a served string, or a script (see below for how strong each is) |
 | `renamed` | the brief carries a closed prefix, so the next dispatch does not fire it a second time |
 | `in-scope` | every path the branch touched is inside the scope the lane declared at open |
 | `findings` | every `FINDING:` line in the report carries a fix, a size and an owner |
@@ -141,10 +141,10 @@ releases the lane's claim.
 repository, and all of them can be true while the page a person opens is last week's build. So the
 close sends a GET and reads what came back.
 
-It returns three values, not two:
+It returns three values, not two, plus `n/a` for a repo whose policy names no proof:
 
-* `yes` the surface answered 200 and carried what it was supposed to carry.
-* `no` the surface answered and it is not serving this build. A real red.
+* `yes` the proof the policy named ran and passed.
+* `no` the surface answered and it is not serving this build, or the script failed. A real red.
 * `skipped` nothing was measured, for a named reason.
 
 A skip is never a pass, and the grader counts it as a failure. No URL in policy, a named
@@ -159,17 +159,20 @@ is read at probe time and never printed, not in a verdict and not in an error. I
 empty the probe is not sent bare, because grading the resulting 401 would measure the credential
 rather than the deployment.
 
-What the shipped close runs today is the URL-and-string probe, and that proof is best-effort. It
-reads the repo's row in the policy's `liveness` table, sends one GET, and passes on a 200 that
-carries the row's expected string, or on a 200 alone when the row expects nothing; `--proof` swaps
-in a different string for one run. Every `yes` it writes says in its own sentence that it is
-best-effort evidence, because a cached response, a stale build that carries the string, or an
-unrelated route reads the same. The stronger forms are in the library with tests: a sha echo,
-where the deployment names its own commit and a `yes` means the served build contains this
-branch's head, and a header echo that reads the commit from one response header and never the
-body. Both begin their `yes` with "deployment identity". The close driver does not call either
-yet, and it does not read the policy's `verify` column. The details, including 401s, redirects,
-CDN caches and the 1 MB body cap, are in [`docs/LIVENESS.md`](docs/LIVENESS.md).
+The close runs the proof the repo's `verify` column in the policy names, and only that one. A sha
+echo (`sha:<path>:<jsonField>`) reads a JSON field in which the deployment names its own commit,
+and passes when that commit contains the lane's, so a neighbour deploying on top does not turn a
+landed lane red. A header echo (`header:<path>:<headerName>`) reads the same from one response
+header and never the body. Both say "deployment identity" beside their `yes`, and neither can pass
+on stale bytes. The string form (`string`) reads the repo's row in the `liveness` table, sends one
+GET, and passes on a 200 that carries the row's expected string; `--proof` swaps in a different
+string for one run. Its `yes` says in its own sentence that it is best-effort evidence, because a
+cached response, a stale build that carries the string, or an unrelated route reads the same.
+`script:<name>` runs that npm script in the lane's checkout and grades the exit code. `none`
+records n/a. Every verdict names the form that ran. When a sha or header endpoint cannot be reached
+or names no commit, the gate records that skip or no with the reason and never falls back to the
+string probe, and an unknown form refuses to load. The details, including 401s, redirects, CDN
+caches and the 1 MB body cap, are in [`docs/LIVENESS.md`](docs/LIVENESS.md).
 
 Full gate reference, including the three gates the grader supports but this driver records as
 unmeasured: the gate matrix, [`docs/gates.json`](docs/gates.json), which

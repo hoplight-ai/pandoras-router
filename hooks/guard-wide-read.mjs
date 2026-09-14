@@ -11,12 +11,14 @@
 // tempting fix — cap tool output — is the wrong one, because truncation silently changes what the
 // agent believes. This refuses instead, and the caller can still have every byte.
 //
-// The measurement behind it, all counted from one fleet's transcripts over one day, plus the
-// threshold probe in this file's test:
+// The measurement behind it. The first three lines were counted once, from one fleet's transcripts
+// over one day, across every tool; hooks/measure-wide-read.mjs measures Reads only, so it does not
+// reproduce them and they stand as that day's count. The fourth line it does reproduce, and the
+// threshold section below is its output.
 //   - about three quarters of everything the fleet pays to re-read is tool RESULTS
 //   - Read alone is 41% of that total
 //   - Bash is called several times MORE often and costs a fraction per call
-//   - most Reads named no range at all, and those carry 85% of all Read tokens
+//   - before this gate was wired, 61% of Reads named no range and those carried 77% of Read bytes
 // So the cost is not chattiness and not call frequency. It is whole-file reads that then sit in
 // the transcript and get re-sent on every later turn.
 //
@@ -25,20 +27,41 @@
 // narrowly is a note that costs tokens on every turn and changes nothing. This is the mechanism.
 //
 // ── THE THRESHOLD, AND WHY THIS NUMBER ────────────────────────────────────────────────────────
-// 12,000 bytes, roughly 3,000 tokens. Measured trade-off across one fleet-day of Reads:
-//   T=1,000 tok  refuses 36.9% of Reads, covering 80.5% of Read tokens   <- too much friction
-//   T=3,000 tok  refuses 20.7% of Reads, covering 64.4% of Read tokens   <- chosen
-//   T=5,000 tok  refuses 11.7% of Reads, covering 45.4% of Read tokens
-//   T=8,000 tok  refuses  2.8% of Reads, covering 15.8% of Read tokens   <- barely worth wiring
-// Past 3,000 the curve flattens: you give up a third of the benefit to save 9% of the friction.
-// Half the median read (p50 is 836 tokens) is nowhere near this and never sees the gate at all.
+// 12,000 bytes, roughly 3,000 tokens. The tables below are the output of hooks/measure-wide-read.mjs,
+// run 2026-09-14 on this machine's own transcripts. Two windows, because this machine wired the gate
+// on 2026-09-03 (the first refusal in its guard log), and a window on each side of that day is the
+// only honest way to show both why the number was chosen and what it changed.
+//
+// Seven days BEFORE the gate (--since 2026-08-27 --until 2026-09-03): 3,232 reads, p50 1,400 tokens,
+// p90 6,424 tokens; 61.1% of reads named no range and those carried 77.3% of read bytes.
+//   threshold        refused (no range and over)   covered (share of read bytes)   all reads over T
+//   T=1,000 tok       43.0% of reads               75.2%                           60.6%   <- too much friction
+//   T=3,000 tok       22.6% of reads               59.8%                           27.1%   <- chosen
+//   T=5,000 tok       14.0% of reads               46.2%                           15.7%
+//   T=8,000 tok        5.0% of reads               23.4%                            5.7%   <- barely worth wiring
+// Past 3,000 the curve flattens: going to 5,000 gives up a quarter of the coverage to save nine
+// points of friction. The median read is a fifth of the threshold and never sees the gate at all.
+//
+// Seven days AFTER, gate live (--days 7, run 2026-09-14): 6,579 reads, p50 743 tokens, p90 3,231
+// tokens; 36.1% of reads named no range and those carried 22.9% of read bytes.
+//   T=1,000 tok       11.9% of reads               18.6%                           40.9%
+//   T=3,000 tok        1.0% of reads                4.6%                           11.2%
+//   T=5,000 tok        0.4% of reads                3.2%                            5.4%
+//   T=8,000 tok        0.3% of reads                2.8%                            2.4%
+// Read them together: reads over 3,000 tokens fell from 27.1% to 11.2% of all reads, and nearly
+// every big read that remains now arrives with a range named (11.2% over, 1.0% refused). That is
+// the gate doing what it was wired to do. It is also why a post-gate window on its own cannot
+// reproduce the table that justified the threshold; anyone re-measuring must bound the window.
+//
+// Rerun: node hooks/measure-wide-read.mjs [transcripts-dir] --days 7  (--since and --until bound a window)
 //
 // ── WHAT THIS DOES NOT DO, STATED PLAINLY ─────────────────────────────────────────────────────
 // A refusal does not delete those tokens. The caller re-issues with a range and still pays for
 // what it takes. The saving is the difference between a whole file and the part that was wanted,
-// and it is NOT the 64.4% above — that figure is the tokens the gate gets a say over, not the
-// tokens it removes. Anyone quoting 64.4% as a saving is quoting it wrong. The real number can
-// only be measured after the fact, from transcripts on either side of the day it was wired.
+// and it is NOT the 59.8% above — that figure is the tokens the gate gets a say over, not the
+// tokens it removes. Anyone quoting 59.8% as a saving is quoting it wrong. The before-and-after
+// tables show what shifted; they still do not put a token count on the saving, because the reads
+// that were refused and the ranged reads that replaced them are not paired in any transcript.
 //
 // ── FAILURE MODES, ACCEPTED ───────────────────────────────────────────────────────────────────
 // 1. A caller that genuinely needs a whole large file pays one extra round trip to say so.
@@ -123,8 +146,8 @@ const tok = Math.round(size / 4);
 deny(
   `Whole-file Read of ${file} (${kb} KB, roughly ${tok.toLocaleString('en-US')} tokens). ` +
   `A tool result stays in the conversation and is re-sent on every later turn, so this one file ` +
-  `is charged again on every turn for the rest of the session. Measured across one fleet-day: reads ` +
-  `with no range carry 85% of all Read tokens.\n\n` +
+  `is charged again on every turn for the rest of the session. Measured before this gate was wired ` +
+  `(hooks/measure-wide-read.mjs): reads with no range carried 77% of all Read bytes.\n\n` +
   `Do one of these instead:\n` +
   `  - Grep for what you need and read only around the hits\n` +
   `  - Read with offset and limit for the section you actually want\n` +

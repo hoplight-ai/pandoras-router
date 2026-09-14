@@ -112,6 +112,20 @@ lanes sharing the hazard serialize and two lanes sharing nothing still run side 
 | `api` | `db/functions` |
 | `web` | `package.json` |
 
+## Env — the allowlist for a fresh worktree's `.env.local`
+
+OPTIONAL. `lane-open` copies the repo's `.env.local` into every fresh worktree so a lane's first
+job doesn't fail cold on a missing credential; without this table that copy is the whole file, key
+by key, into every checkout that opens. A row here narrows one repo's copy to exactly the named
+keys — space-separated, names only, no values live in this file — so a lane that needs one key
+stops receiving all of them. A repo absent from this table keeps the old behaviour, unchanged.
+
+<!-- table: env -->
+
+| repo | keys |
+|---|---|
+| `api` | `DATABASE_URL STRIPE_KEY` |
+
 ## Traps — what a lane must know before it opens here
 
 OPTIONAL. Free text, printed on the lane card.

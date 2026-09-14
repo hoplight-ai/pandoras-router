@@ -42,6 +42,7 @@ import { recordOpen, recordNote, readLanes } from '../lib/lanes.mjs';
 import { laneOpenPlan, openRefusal, openCasVerdict, resumeVerdict, IN_PLACE } from '../lib/open.mjs';
 import { laneKey } from '../lib/lanes.mjs';
 import { withLock } from '../lib/lock.mjs';
+import { repoPolicy } from '../lib/policy.mjs';
 
 // THE WORKSPACE ROOT is the directory holding `_handoffs/` and your repos. It is NEVER the
 // package's own install location, so it comes from $PANDORAS_ROOT or the current directory.
@@ -142,6 +143,9 @@ export function installPlan({ inPlace, hasPackageJson, hasModules, install }) {
  * NEVER OVERWRITES: a worktree that already carries its own `.env.local` — a RESUME, or a lane
  * that wrote one itself before this ran — is left exactly as it is.
  *
+ * An optional per-repo allowlist (POLICY.md's `env` table, Router ENV1) narrows WHAT is copied,
+ * never WHETHER — that decision stays exactly this function's job. See copyEnvFile below.
+ *
  * @param {{inPlace:boolean, repoEnvExists:boolean, worktreeEnvExists:boolean}} p
  * @returns {{copy:boolean, why:string}}
  */
@@ -153,15 +157,47 @@ export function envCopyPlan({ inPlace, repoEnvExists, worktreeEnvExists }) {
 }
 
 /**
+ * Split a `.env.local` file's text down to the `KEY=...` lines whose key is on `keys`, in the
+ * file's OWN order (never the allowlist's order — the allowlist is a filter, not a re-sort).
+ * Comments and blank lines are dropped unconditionally: an allowlisted copy is a clean file, not
+ * the original with some lines blanked out. A key on `keys` the text does not contain is named in
+ * `missing`, never invented as an empty line.
+ *
+ * @param {string} text
+ * @param {string[]} keys
+ * @returns {{lines:string[], found:string[], missing:string[]}}
+ */
+export function filterEnvLines(text, keys) {
+  const wanted = new Set(keys);
+  const foundOrder = [];
+  const found = new Set();
+  const lines = [];
+  for (const line of String(text ?? '').split(/\r?\n/)) {
+    const m = /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(line);
+    if (!m || !wanted.has(m[1]) || found.has(m[1])) continue;
+    lines.push(line);
+    found.add(m[1]);
+    foundOrder.push(m[1]);
+  }
+  const missing = keys.filter((k) => !found.has(k));
+  return { lines, found: foundOrder, missing };
+}
+
+/**
  * The disk half of envCopyPlan. A plain file copy, never a symlink (a symlinked credential would
  * follow the repo's own file if either copy is ever edited, which defeats the point of a lane
  * having its own checkout), mode 600 because a credential file has no business being
  * group/world-readable. Never throws: a failed copy is reported and the lane still opens correctly
  * — the same "loud, not fatal" shape installPlan's own failure handling uses just above.
  *
+ * `envKeys`, when given (POLICY.md's optional `env` table — see policy.mjs), narrows the copy to
+ * exactly those variable names via filterEnvLines instead of copying the whole file. Omitted or
+ * empty means today's behaviour: the whole file, byte for byte.
+ *
+ * @param {{repoDir:string, checkoutDir:string, inPlace:boolean, envKeys?:string[]|null}} p
  * @returns {{copy:boolean, why:string, copied:boolean, error:string|null}}
  */
-export function copyEnvFile({ repoDir, checkoutDir, inPlace }) {
+export function copyEnvFile({ repoDir, checkoutDir, inPlace, envKeys = null }) {
   const repoEnvPath = path.join(repoDir, '.env.local');
   const worktreeEnvPath = path.join(checkoutDir, '.env.local');
   const plan = envCopyPlan({
@@ -176,6 +212,15 @@ export function copyEnvFile({ repoDir, checkoutDir, inPlace }) {
     return { ...plan, copied: false, error: null };
   }
   try {
+    if (envKeys && envKeys.length) {
+      const source = fs.readFileSync(repoEnvPath, 'utf8');
+      const { lines, found, missing } = filterEnvLines(source, envKeys);
+      fs.writeFileSync(worktreeEnvPath, lines.length ? `${lines.join('\n')}\n` : '');
+      fs.chmodSync(worktreeEnvPath, 0o600);
+      const missingNote = missing.length ? `; missing: ${missing.join(', ')}` : '';
+      console.log(`  env        ${found.length} of ${envKeys.length} keys copied from the repo (mode 600)${missingNote}`);
+      return { ...plan, copied: true, error: null };
+    }
     fs.copyFileSync(repoEnvPath, worktreeEnvPath);
     fs.chmodSync(worktreeEnvPath, 0o600);
     console.log('  env        .env.local copied from the repo (mode 600)');
@@ -415,7 +460,9 @@ function main() {
   // CREDENTIALS. `git worktree add` copies tracked files only, so a fresh checkout has no
   // .env.local even when the repo it came from needs one to run at all. See envCopyPlan above.
   // Not gated on --install: bytes, not megabytes, so there is no reason to make a lane ask twice.
-  copyEnvFile({ repoDir, checkoutDir, inPlace });
+  // envKeys narrows the copy to POLICY.md's per-repo allowlist (Router ENV1); a repo with no `env`
+  // row there gets null, which is today's whole-file behaviour, unchanged.
+  copyEnvFile({ repoDir, checkoutDir, inPlace, envKeys: repoPolicy(r.policy, card.repo)?.env ?? null });
   console.log(`  report     ${card.report}`);
   console.log(`  claim      ${claimLine}`);
   console.log(`  ledger     ${ledgerLine}`);

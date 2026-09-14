@@ -84,7 +84,9 @@ function makeWorkspace({ verify, repoUrl = BASE, livenessUrl = `${BASE}/`, scrip
     .replace('| `web` | 1 | 3 | product | 5173 | push | `sha:/api/status:release` | https://web.example.com |',
       `| \`web\` | 1 | 3 | product | 5173 | push | \`${verify}\` | ${repoUrl} |`)
     .replace('| `web` | https://web.example.com/ | - | - | - |',
-      `| \`web\` | ${livenessUrl} | \`${MARKER}\` | - | 2000 |`);
+      // 15 s, not less: a child's first fetch loads the HTTP client inside the probe's own timer, and
+      // on a loaded machine that alone was measured past 2 s, which read as an unreachable surface.
+      `| \`web\` | ${livenessUrl} | \`${MARKER}\` | - | 15000 |`);
   assert.ok(policy.includes(`\`${verify}\``) && policy.includes(livenessUrl), 'premise: the example policy rows this suite rewrites are still spelled as expected');
   fs.writeFileSync(path.join(lanes, 'POLICY.md'), policy);
 

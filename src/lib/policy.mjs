@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readTable } from './md-table.mjs';
 import { setModels } from './briefs.mjs';
+import { parseVerifyHeader } from './liveness.mjs';
 
 export function policyFile(root) {
   return path.join(root, '_handoffs', '_lanes', 'POLICY.md');
@@ -251,8 +252,21 @@ export function parseLiveness(repo, row) {
   return { repo, url, expect, auth, timeoutMs };
 }
 
-// verify DSL. `sha:` is the only form that cannot pass on stale bytes, which is why it is preferred
-// wherever the surface can echo its own commit.
+// verify DSL. The close driver dispatches on the kind this returns (gateLive in bin/close.mjs), so the
+// column is authoritative: whatever form a row names is the proof the close runs, and nothing else.
+//
+//   sha:<path>:<jsonField>      GET url+path, read one JSON field, pass when it names a commit that
+//                               contains the lane's commit. Cannot pass on stale bytes.
+//   header:<path>:<headerName>  the same echo read from one response header. Parsed by
+//                               parseVerifyHeader in lib/liveness.mjs, beside its probe.
+//   string                      the liveness row's URL-and-string probe. Best-effort evidence.
+//   script:<name>               `npm run <name>` in the lane's checkout, graded by exit code.
+//   none                        nothing to prove; the gate records n/a.
+//
+// AN UNKNOWN FORM THROWS AT LOAD, naming every valid form. A row the driver cannot dispatch on must
+// never reach the close, because the only thing a close could do with it is guess.
+export const VERIFY_FORMS = ['sha:<path>:<jsonField>', 'header:<path>:<headerName>', 'string', 'script:<name>', 'none'];
+
 export function parseVerify(repo, raw) {
   const v = String(raw ?? '').trim();
   if (v === 'none' || v === '-') return { kind: 'none' };
@@ -260,11 +274,19 @@ export function parseVerify(repo, raw) {
   if (v.startsWith('sha:')) {
     const rest = v.slice(4);
     const i = rest.lastIndexOf(':');
-    if (i < 1) throw new Error(`policy: repo "${repo}" verify "${v}" must be sha:<path>:<jsonfield>`);
-    return { kind: 'sha', path: rest.slice(0, i), field: rest.slice(i + 1) };
+    const p = i >= 0 ? rest.slice(0, i) : '';
+    const field = i >= 0 ? rest.slice(i + 1) : '';
+    if (!p.startsWith('/') || !field) throw new Error(`policy: repo "${repo}" verify "${v}" must be sha:<path>:<jsonField> (an absolute path, then one JSON field name)`);
+    return { kind: 'sha', path: p, field };
   }
-  if (v.startsWith('script:')) return { kind: 'script', name: v.slice(7) };
-  throw new Error(`policy: repo "${repo}" has verify "${v}"; must be sha:<path>:<field>, string, script:<name>, or none`);
+  const header = parseVerifyHeader(repo, v);
+  if (header) return header;
+  if (v.startsWith('script:')) {
+    const name = v.slice(7).trim();
+    if (!name || /\s/.test(name)) throw new Error(`policy: repo "${repo}" verify "${v}" must be script:<name> (one npm script name, no spaces)`);
+    return { kind: 'script', name };
+  }
+  throw new Error(`policy: repo "${repo}" has verify "${v}"; must be one of ${VERIFY_FORMS.join(', ')}`);
 }
 
 export function repoPolicy(policy, repo) {

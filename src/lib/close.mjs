@@ -776,6 +776,41 @@ export function liveShaVerdict({ served, sha, isAncestor, servedKnown }) {
   return { value: 'no', why: `release=${served.slice(0, 8)} neither matches nor contains this branch's head ${sha.slice(0, 8)} — the alias is serving a build without this lane's work. Check for a stacked deploy before re-firing anything.` };
 }
 
+/**
+ * WHICH PROOF RAN, in the words every live verdict leads with (VERIFY1, 2026-09-14). The close
+ * driver dispatches on the policy's `verify` column, and a reader of the ledger or the printed row
+ * must be able to tell a string match from a commit echo without opening POLICY.md, so the form and
+ * the row that named it head the sentence.
+ *
+ * @param {{kind:string, path?:string, field?:string, header?:string, name?:string}|null} verify
+ * @returns {string}
+ */
+export function verifyFormLabel(verify) {
+  const v = verify ?? { kind: 'none' };
+  if (v.kind === 'sha') return `sha form (verify sha:${v.path}:${v.field})`;
+  if (v.kind === 'header') return `header form (verify header:${v.path}:${v.header})`;
+  if (v.kind === 'string') return 'string form (verify string, the liveness row\'s URL-and-string probe)';
+  if (v.kind === 'script') return `script form (verify script:${v.name})`;
+  if (v.kind === 'none') return 'none form (verify none)';
+  return `unknown form (${v.kind})`;
+}
+
+/**
+ * THE COMMIT A COMMIT-ECHO PROOF COMPARES AGAINST. The merge commit a LAND record names, when the
+ * checkout knows it; otherwise the lane branch's tip. Either is contained by any later deploy built
+ * on top of it, which is what lets the sha and header forms pass a lane a neighbour deployed after.
+ * A squash-merged lane with no LAND record has a tip main does not contain, and grades no rather
+ * than a guess; recording the landing fixes it. Pure: the resolved commits are handed in.
+ *
+ * @param {{landMerge?:string|null, branchTip?:string|null}} p
+ * @returns {{sha:string|null, source:string}}
+ */
+export function laneCommitFor({ landMerge = null, branchTip = null }) {
+  if (landMerge) return { sha: landMerge, source: 'the merge commit the LAND record names' };
+  if (branchTip) return { sha: branchTip, source: 'the lane branch tip' };
+  return { sha: null, source: 'no LAND record and no branch tip this checkout can resolve' };
+}
+
 // `exempt` joins `n/a` as a pass. Both mean "this gate does not apply here"; the difference is that
 // n/a is structural (no deployed surface at all) and exempt is measured (the surface answered, and
 // what it answered was a refusal, which is correct for a gated product). Neither claims the build

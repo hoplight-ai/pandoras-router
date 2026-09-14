@@ -1,0 +1,222 @@
+{
+  "$comment": "The gate matrix. One object per gate the close driver knows, plus the two allocator checks and the one open-time refusal that stop a collision before a close ever runs. test/gate-matrix-test.mjs asserts every column here is a real CLOSE-row column in src/lib/lanes.mjs, every tested_in file exists, and every verdicts set equals the literal strings the named source can write. A row whose column is null is enforced but never stored as its own ledger field; a failing value reaches the ledger only inside the CLOSE row's reason text. Where a value below is a judgment rather than a reading of the source, the note says so.",
+  "schema": {
+    "enforced_by": ["alloc", "open", "close", "recorded-only"],
+    "external_dependency": ["filesystem", "git", "network", "none"],
+    "verdict_words": ["yes", "no", "skip", "n/a", "exempt", "-"],
+    "source_forms": {
+      "function": "the body of a top-level function in file, from its declaration to the first line holding only a closing brace",
+      "const": "one exported constant declaration in file, such as LIVE_YES",
+      "between": "the text of file between two comment markers, for a gate measured inline in main()",
+      "line_contains": "every line of file carrying this exact text; used where the driver writes a fixed value"
+    },
+    "passes": ["yes", "n/a", "exempt"],
+    "fails": ["no", "skip"],
+    "unmeasured_marker": "-"
+  },
+  "gates": [
+    {
+      "name": "merged",
+      "column": "merged",
+      "enforced_by": "close",
+      "verdicts": ["yes", "no", "skip", "n/a"],
+      "external_dependency": "git",
+      "tested_in": ["test/router-test.mjs"],
+      "source": [
+        { "file": "src/bin/close.mjs", "function": "gateMerged" },
+        { "file": "src/lib/close.mjs", "function": "gradeMerge" }
+      ],
+      "what_it_proves": "Every path the branch touched holds the same bytes on origin/main as on the branch, compared blob by blob against the merge base, so a squash merge still reads as merged.",
+      "what_it_does_not_prove": "That main still builds with a neighbour's work merged beside these files, or that the bytes are correct; a path main edited after the branch started grades no with that path named, not a verdict either way.",
+      "note": "The pure decision (classifyPath, gradeMerge) is tested; the git-reading wrapper gateMerged is not exported and has no test of its own. n/a is written for a branchless in-place lane on a target that is not a git repository."
+    },
+    {
+      "name": "green",
+      "column": "green",
+      "enforced_by": "close",
+      "verdicts": ["yes", "no", "skip", "n/a"],
+      "external_dependency": "filesystem",
+      "tested_in": "none",
+      "source": [
+        { "file": "src/bin/close.mjs", "function": "gateGreen" }
+      ],
+      "what_it_proves": "npm run build exited 0 in the lane's own checkout at close time, on the dispatcher's machine.",
+      "what_it_does_not_prove": "That the build is a build of the combined result: the fresh-base rule (freshBaseVerdict in src/lib/close.mjs) exists in the library but this driver does not call it, so a green build on a base that predates a neighbour's landing still reads yes.",
+      "note": "Judgment: tested_in is none because gateGreen is not exported and nothing runs it; test/router-test.mjs covers only how gradeGates treats a green value. The dependency is really a child process (npm) plus the filesystem; the enum has no word for that, so filesystem was chosen. The build runs the checkout's own package.json scripts, which the README discloses under What this touches on your machine."
+    },
+    {
+      "name": "live",
+      "column": "live",
+      "enforced_by": "close",
+      "verdicts": ["yes", "no", "skip"],
+      "external_dependency": "network",
+      "tested_in": ["test/liveness-test.mjs"],
+      "source": [
+        { "file": "src/bin/close.mjs", "function": "gateLive" },
+        { "file": "src/lib/liveness.mjs", "const": "LIVE_YES" },
+        { "file": "src/lib/liveness.mjs", "const": "LIVE_NO" },
+        { "file": "src/lib/liveness.mjs", "const": "LIVE_SKIPPED" }
+      ],
+      "what_it_proves": "The URL in the repo's liveness policy row answered 200 within the row's timeout and, when the row names an expect string, the first 1 MB of the body carried it; the verdict sentence on that yes calls itself best-effort evidence.",
+      "what_it_does_not_prove": "That the response was this branch's build: with no expect string any 200 passes, with one the string may have been on main already or served from a cache, and the two forms that do prove identity (the sha echo and the header echo) are library functions this driver never calls.",
+      "note": "src/lib/liveness.mjs writes the word skipped and gateLive rewrites it to skip before it reaches the grader or the ledger. The shipped driver runs only probeLiveness, the URL-and-string probe, and never reads the repo's verify column in POLICY.md. The sha form (liveShaVerdict in src/lib/close.mjs), the header echo form (parseVerifyHeader, gradeHeaderEcho and probeHeaderEcho in src/lib/liveness.mjs, whose verify form parseVerify in src/lib/policy.mjs does not yet accept), the novelty rule (proofStringNovel), the string form's precedence (liveStringVerdict), the surfaces table (surfaceReach) and the second ask (deployProbePlan) are exported and tested, and none is invoked here. The grader also accepts exempt as a pass and site/gates.html describes it, but no code path in this repository writes exempt. The sources listed are the ones gateLive reaches, so the verdict set is checked against those and not against the unused forms. See docs/LIVENESS.md."
+    },
+    {
+      "name": "renamed",
+      "column": "renamed",
+      "enforced_by": "close",
+      "verdicts": ["yes", "no"],
+      "external_dependency": "filesystem",
+      "tested_in": ["test/router-test.mjs"],
+      "source": [
+        { "file": "src/bin/close.mjs", "between": ["// ---- renamed", "// ---- the report"] }
+      ],
+      "what_it_proves": "No brief on the bridge whose filename carries this lane's id as a whole hyphen-delimited token still classifies as live under PREFIXES.md, so the next dispatch will not fire it again.",
+      "what_it_does_not_prove": "That the brief's work was finished; a lane that renames its own brief passes this gate whatever it shipped.",
+      "note": "The filename matcher (briefMatchesLaneOrKey) is tested; the directory listing around it is not. With --apply, and only when this is the sole failing gate or the lane's report is already on the bridge, the close itself renames the brief (renameOnCloseVerdict), so the value recorded is the one measured before that rename."
+    },
+    {
+      "name": "in-scope",
+      "column": "in-scope",
+      "enforced_by": "close",
+      "verdicts": ["yes", "no", "skip", "n/a"],
+      "external_dependency": "git",
+      "tested_in": ["test/router-test.mjs"],
+      "source": [
+        { "file": "src/bin/close.mjs", "between": ["// ---- in-scope", "// ---- renamed"] },
+        { "file": "src/lib/close.mjs", "function": "scopeCompliance" },
+        { "file": "src/lib/close.mjs", "function": "zeroCommitScopeVerdict" }
+      ],
+      "what_it_proves": "Every path in the branch's diff against its merge base sits inside the file scope the lane declared when it opened, or on the ALWAYS_IN_SCOPE allowlist, which ships empty.",
+      "what_it_does_not_prove": "That a change inside the scope cannot break a file outside it through an API shape, a schema, a generated file or a shared constant; the gate measures paths, not effects, and in this driver a lane that declared Touches: none and then committed files still reads n/a. See docs/DESIGN-NOTES.md, entry b.",
+      "note": "n/a means the lane declared no scope and therefore held the repo alone. skip means a real scope was declared and the diff to measure is empty. This driver takes the diff from the merge gate's base (the merge base of origin/main and the branch), not from the base recorded at OPEN. Two readings follow from the source and are recorded here because a reviewer will find them. First, a branch already fully merged into main has a merge base equal to its own tip, so its diff is empty and a lane with a real declared scope reads skip, not yes. Second, a Touches: none lane is stored with an empty scope, and scopeCompliance reads an empty scope as undeclared, so a none lane that did commit files reads n/a (test/router-test.mjs asserts that empty-scope reading); only a none lane with an empty diff reaches the yes in zeroCommitScopeVerdict. When the merge base could not be computed the touched list is also empty and the zero-commit reading applies."
+    },
+    {
+      "name": "findings",
+      "column": null,
+      "enforced_by": "close",
+      "verdicts": ["yes", "no", "n/a"],
+      "external_dependency": "filesystem",
+      "tested_in": ["test/finding-lines-test.mjs", "test/gate-findings-sidefiles-test.mjs"],
+      "source": [
+        { "file": "src/lib/finding-lines.mjs", "function": "findingsGateVerdict" }
+      ],
+      "what_it_proves": "Every FINDING: line in the lane's own report names a fix, a valid size and an owner, and no small finding is handed to the human owner.",
+      "what_it_does_not_prove": "That the finding is real or the fix is right; the gate polices the shape of the line, never its content.",
+      "note": "No ledger column: recordClose in src/lib/lanes.mjs has no field for this gate, so a failing value survives only inside the CLOSE row's reason text. n/a is written when the report is not on disk yet, which is the normal order for a lane closing before it writes up."
+    },
+    {
+      "name": "no-side-files",
+      "column": null,
+      "enforced_by": "close",
+      "verdicts": ["yes", "no", "skip", "n/a"],
+      "external_dependency": "filesystem",
+      "tested_in": ["test/side-files-gate-test.mjs", "test/gate-findings-sidefiles-test.mjs"],
+      "source": [
+        { "file": "src/lib/side-files-gate.mjs", "function": "noSideFilesVerdict" }
+      ],
+      "what_it_proves": "No REFERENCE-, SWEEP- or TRIAGE- file modified on the bridge between the lane's OPEN stamp and now can be attributed to this lane by its body naming the lane or the brief title, or by the lane's own report naming it.",
+      "what_it_does_not_prove": "That no side file was written at all: a matching file in the window that none of the attribution tests tie to this lane prints a warning and passes.",
+      "note": "No ledger column, same as findings. This driver passes no worktreeDiffPaths, so the attribution test that reads the lane's branch diff never fires here; only the body and report tests do. A Side-file: allowed line in the brief header makes the gate n/a, and a lane with no recorded open time reads skip."
+    },
+    {
+      "name": "report-free",
+      "column": "report-free",
+      "enforced_by": "recorded-only",
+      "verdicts": ["n/a"],
+      "external_dependency": "none",
+      "tested_in": ["test/router-test.mjs"],
+      "source": [
+        { "file": "src/bin/close.mjs", "line_contains": "reportFree: 'n/a'" }
+      ],
+      "what_it_proves": "Nothing at close: this driver writes the literal n/a on every close, which the grader counts as a pass.",
+      "what_it_does_not_prove": "That the report filename was free; the check that would prove it (reportFreeVerdict, tested) is never called by this driver.",
+      "note": "The collision this gate was built for is handled earlier: the allocator numbers a taken name (row report-name-collision) and hooks/guard-report-overwrite.mjs refuses a whole-file Write onto an existing bridge report at run time."
+    },
+    {
+      "name": "owner-way-in",
+      "column": "owner-way",
+      "enforced_by": "recorded-only",
+      "verdicts": ["-"],
+      "external_dependency": "none",
+      "tested_in": ["test/router-test.mjs"],
+      "source": [
+        { "file": "src/bin/close.mjs", "line_contains": "ownerWay: '-'" }
+      ],
+      "what_it_proves": "Nothing: the driver hands the grader no value, which gradeGates reads as n/a, and writes the dash to the ledger, which every reader treats as not measured.",
+      "what_it_does_not_prove": "That the owner's stored credential still opens the deployment; no code in this repository performs that check.",
+      "note": "The grader's handling of a supplied owner-way-in value (no leads the reason line; skip fails; n/a passes) is tested in test/router-test.mjs. The measurement itself has no implementation here."
+    },
+    {
+      "name": "roadmap",
+      "column": "roadmap",
+      "enforced_by": "recorded-only",
+      "verdicts": ["-"],
+      "external_dependency": "none",
+      "tested_in": ["test/router-test.mjs"],
+      "source": [
+        { "file": "src/bin/close.mjs", "line_contains": "roadmap: '-'" }
+      ],
+      "what_it_proves": "Nothing: same shape as owner-way-in, the grader sees n/a and the ledger gets a dash.",
+      "what_it_does_not_prove": "That the brief names a board row; the verdict that would say so lives outside this repository.",
+      "note": "gradeGates grades a supplied roadmap value and test/router-test.mjs covers that grading; nothing in this repository produces one."
+    },
+    {
+      "name": "scope-disjoint",
+      "column": null,
+      "enforced_by": "alloc",
+      "verdicts": [],
+      "external_dependency": "none",
+      "tested_in": ["test/router-test.mjs"],
+      "source": [
+        { "file": "src/lib/alloc.mjs", "function": "allocate" },
+        { "file": "src/lib/scope.mjs", "function": "scopesIntersect" },
+        { "file": "src/lib/scope.mjs", "function": "applyExclusive" }
+      ],
+      "what_it_proves": "Two lanes offered to run together in one repo declared file scopes that share no path after normalisation, exclusive-path widening, and the whole-repo default for anything undeclared or unparseable; a held claim with no OPEN record counts as the whole repo.",
+      "what_it_does_not_prove": "That the two lanes cannot break one another through a shared interface; disjoint paths mean no two lanes write one file, and nothing more. See docs/DESIGN-NOTES.md, entry b.",
+      "note": "Not a close gate and not a verdict word: the outcome is a card that either fires now or carries a firesAfter sentence naming the lane and the overlapping paths. The verdicts list is empty on purpose and the matrix test checks only that the named functions exist. The shell (src/bin/lane-alloc.mjs) reads disk and ledger; allocate itself is pure."
+    },
+    {
+      "name": "report-name-collision",
+      "column": null,
+      "enforced_by": "alloc",
+      "verdicts": [],
+      "external_dependency": "none",
+      "tested_in": ["test/router-test.mjs"],
+      "source": [
+        { "file": "src/lib/alloc.mjs", "function": "allocate" },
+        { "file": "src/lib/naming.mjs", "const": "reportFor" }
+      ],
+      "what_it_proves": "The report filename printed on a card carries the lane id and was not already on the bridge at allocation time; a taken name gets a numbered variant and the card says so.",
+      "what_it_does_not_prove": "That two sessions of one lane cannot collide after allocation: both derive the same name, and the runtime defence is hooks/guard-report-overwrite.mjs, not this check.",
+      "note": "Not a close gate. The card field is reportTaken, a boolean, so the verdicts list is empty on purpose. Judgment: external_dependency is none because allocate is pure and is handed the set of existing report names; the shell that builds that set lists the bridge directory, so a reader who counts the shell would say filesystem."
+    },
+    {
+      "name": "checkout-unexplained",
+      "column": null,
+      "enforced_by": "open",
+      "verdicts": [],
+      "external_dependency": "filesystem",
+      "tested_in": ["test/router-test.mjs"],
+      "source": [
+        { "file": "src/lib/open.mjs", "function": "resumeVerdict" }
+      ],
+      "what_it_proves": "An existing checkout directory at the lane's derived path is either this lane's own PARTIAL leftover, which the open resumes, or unexplained, which the open refuses as a collision.",
+      "what_it_does_not_prove": "That no session is inside a directory the ledger explains; a lane with an OPEN record and no CLOSE is refused precisely because its folder existing proves nothing either way.",
+      "note": "Judgment: the brief asked for the two allocator rows; this open-time refusal is added because it is the third place a collision is stopped before a close, and without it the enforced_by value open would name nothing."
+    }
+  ],
+  "close_refusals": {
+    "$comment": "Not gates. As designed, a failing gate makes the close PARTIAL and the close still happens, while these three abort it with a non-zero exit and write nothing, on a dry run as well. Decided by doneReportRefusal in src/lib/close.mjs; src/bin/close.mjs asks only when the gates graded DONE and a report is on disk.",
+    "names": ["no-status-word", "done-without-evidence", "done-honest-unaddressed"],
+    "source": [{ "file": "src/lib/close.mjs", "function": "doneReportRefusal" }],
+    "note": "None of the three can fire in this driver as it stands. doneReportRefusal returns ok at once unless it is handed present: true, and the call in src/bin/close.mjs passes file, statusWord, evidencePresent, doneHonestWarn and overruled but neither present nor statusFound. It also passes doneHonestWarn as false. The report's own STATUS word still lowers a grade through gradeGates, which the driver does feed. The matrix test asserts the call still omits present, so the day the driver is fixed the suite turns red and this note gets rewritten."
+  },
+  "ledger": {
+    "$comment": "The CLOSE record as recordClose writes it. The RECORD FORMS comment at the top of src/lib/lanes.mjs lists the columns through roadmap and omits kind; the HEADER that file writes into a fresh LANES.md stops at owner-way. recordClose is the authority, and the matrix test reads the comment line and then checks recordClose for the appended field.",
+    "columns_from_comment": ["lane", "status", "merged", "green", "live", "renamed", "report-free", "ISO", "reason", "owner-way", "in-scope", "roadmap"],
+    "columns_appended_by_recordClose": ["kind"],
+    "gate_value_columns": ["merged", "green", "live", "renamed", "report-free", "owner-way", "in-scope", "roadmap"]
+  }
+}

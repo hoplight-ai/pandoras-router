@@ -262,6 +262,36 @@ T('RED-PROOF refusals: the driver tells the refusal a report is present, asks wh
   assert.ok(!/none of them fires/i.test(read('docs/THREAT-MODEL.md')), 'docs/THREAT-MODEL.md still calls the refusals inert');
 });
 
+T('RED-PROOF live: the driver dispatches on every verify form, never falls back to the string probe, and the matrix and LIVENESS.md say so', () => {
+  // VERIFY1, 2026-09-14. The driver used to ignore the verify column and always run the string
+  // probe, while the library carried the strong forms unused. This holds the dispatch in place and
+  // keeps the two documents a reader starts from describing the driver that ships.
+  const live = sliceFunction(binSrc, 'gateLive', 'bin');
+  assert.match(live, /rp\.verify/, 'gateLive no longer reads the repo\'s verify column');
+  for (const kind of ['none', 'string', 'script', 'sha', 'header']) {
+    assert.match(live, new RegExp(`verify\\.kind === '${kind}'`), `gateLive has no branch for the ${kind} form`);
+  }
+  assert.match(live, /probeShaEcho\(/, 'the sha form no longer calls the library\'s sha echo probe');
+  assert.match(live, /probeHeaderEcho\(/, 'the header form no longer calls the library\'s header echo probe');
+  assert.equal((live.match(/probeLiveness\(/g) ?? []).length, 1, 'the string probe is called from more than one place in gateLive, which is a fallback path');
+  const stringBranch = sliceBetween(live, ["verify.kind === 'string'", "verify.kind === 'script'"], 'bin gateLive');
+  assert.match(stringBranch, /probeLiveness\(/, 'the one string probe call is not inside the string branch');
+
+  const row = byName.get('live');
+  for (const fn of ['probeShaEcho', 'probeHeaderEcho', 'probeLiveness', 'scriptProofVerdict']) {
+    assert.match(row.note, new RegExp(fn), `docs/gates.json live note does not name ${fn}, which the driver calls`);
+  }
+  assert.doesNotMatch(row.note, /never reads the repo's verify column/, 'docs/gates.json still says the driver ignores the verify column');
+  assert.doesNotMatch(row.what_it_does_not_prove, /this driver never calls/, 'docs/gates.json still says the driver never calls the identity forms');
+  const doc = read('docs/LIVENESS.md');
+  const section = sliceBetween(doc, ['## What the shipped driver runs', '\n## '], 'docs/LIVENESS.md');
+  for (const form of ['sha:<path>:<jsonField>', 'header:<path>:<headerName>', '`string`', 'script:<name>', '`none`']) {
+    assert.ok(section.includes(form), `LIVENESS.md "What the shipped driver runs" does not name ${form}`);
+  }
+  assert.match(section, /never falls back/, 'LIVENESS.md does not state the no-fallback rule');
+  assert.doesNotMatch(doc, /driver never reads the repo's `verify` column/, 'LIVENESS.md still says the driver ignores the verify column');
+});
+
 // ── the prose documents point at files that exist ────────────────────────────────────────────
 // A hook renamed from .sh to .mjs left three stale paths in these documents once. A path a reader
 // cannot open is a claim nobody can check, so every repo path the documents name must exist.

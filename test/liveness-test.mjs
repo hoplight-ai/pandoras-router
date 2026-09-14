@@ -13,9 +13,10 @@ import assert from 'node:assert/strict';
 import {
   probeLiveness, gradeLiveness, livenessHeaders, LIVE_YES, LIVE_NO, LIVE_SKIPPED,
   parseVerifyHeader, parseVerifyWithHeader, gradeHeaderEcho, probeHeaderEcho,
+  gradeShaEcho, probeShaEcho, scriptProofVerdict,
 } from '../src/lib/liveness.mjs';
-import { parseLiveness, parseVerify } from '../src/lib/policy.mjs';
-import { liveStringVerdict, liveShaVerdict } from '../src/lib/close.mjs';
+import { parseLiveness, parseVerify, VERIFY_FORMS } from '../src/lib/policy.mjs';
+import { liveStringVerdict, liveShaVerdict, verifyFormLabel, laneCommitFor } from '../src/lib/close.mjs';
 
 const tests = [];
 const T = (name, fn) => tests.push({ name, fn });
@@ -341,7 +342,126 @@ T('header parser adapter: the one-line adapter accepts the header form and deleg
   assert.equal(parseVerifyWithHeader('web', 'header:/api/status:X-Release', parseVerify).kind, 'header');
   assert.deepEqual(parseVerifyWithHeader('web', 'sha:/api/status:release', parseVerify), { kind: 'sha', path: '/api/status', field: 'release' });
   assert.deepEqual(parseVerifyWithHeader('web', 'string', parseVerify), { kind: 'string' });
-  assert.throws(() => parseVerifyWithHeader('web', 'bogus', parseVerify), /must be sha:<path>:<field>/);
+  assert.throws(() => parseVerifyWithHeader('web', 'bogus', parseVerify), /must be one of sha:<path>:<jsonField>/);
+});
+
+// ---------------------------------------------------------------- the verify column the driver dispatches on
+
+T('policy parser accepts every verify form the close driver dispatches on, header included', () => {
+  assert.deepEqual(parseVerify('web', 'sha:/api/status:release'), { kind: 'sha', path: '/api/status', field: 'release' });
+  assert.deepEqual(parseVerify('web', 'header:/api/status:X-Release'), { kind: 'header', path: '/api/status', header: 'x-release' });
+  assert.deepEqual(parseVerify('web', 'string'), { kind: 'string' });
+  assert.deepEqual(parseVerify('web', 'script:verify:prod'), { kind: 'script', name: 'verify:prod' });
+  assert.deepEqual(parseVerify('web', 'none'), { kind: 'none' });
+  assert.deepEqual(parseVerify('web', '-'), { kind: 'none' });
+});
+
+T('RED-PROOF policy parser: an unknown form throws naming all five valid forms, and a half-written form throws rather than guessing', () => {
+  let msg = '';
+  try { parseVerify('web', 'etag:/api/status'); } catch (e) { msg = e.message; }
+  for (const form of VERIFY_FORMS) assert.ok(msg.includes(form), `the refusal does not list ${form}: ${msg}`);
+  assert.equal(VERIFY_FORMS.length, 5);
+  for (const bad of ['sha:', 'sha:/api/status', 'sha:api/status:release', 'sha:/api/status:', 'script:', 'script:two words', 'header:/api/status']) {
+    assert.throws(() => parseVerify('web', bad), /must be/, `expected a refusal for "${bad}"`);
+  }
+});
+
+T('the verdict label names which proof ran, for every form', () => {
+  assert.match(verifyFormLabel({ kind: 'sha', path: '/s', field: 'release' }), /^sha form \(verify sha:\/s:release\)$/);
+  assert.match(verifyFormLabel({ kind: 'header', path: '/s', header: 'x-release' }), /^header form/);
+  assert.match(verifyFormLabel({ kind: 'string' }), /^string form/);
+  assert.match(verifyFormLabel({ kind: 'script', name: 'proof' }), /^script form \(verify script:proof\)$/);
+  assert.match(verifyFormLabel({ kind: 'none' }), /^none form/);
+});
+
+T('the commit an echo is compared against: the LAND merge commit first, then the branch tip, and neither is named as such', () => {
+  assert.deepEqual(laneCommitFor({ landMerge: 'm1', branchTip: 't1' }).sha, 'm1');
+  assert.deepEqual(laneCommitFor({ landMerge: null, branchTip: 't1' }).sha, 't1');
+  const none = laneCommitFor({});
+  assert.equal(none.sha, null);
+  assert.match(none.source, /no LAND record/);
+});
+
+const SHA_CFG = { url: 'https://example.test/', verify: { kind: 'sha', path: '/api/status', field: 'release' }, auth: null, timeoutMs: 5000 };
+
+T('sha form PASSES when the served field contains the lane commit by ancestry, with the injected containment verdict', async () => {
+  const f = fakeFetch({ status: 200, body: JSON.stringify({ release: 'def4567890' }) });
+  const v = await probeShaEcho({ config: SHA_CFG, sha: SHA, fetchImpl: f, verdict: liveShaVerdict, ancestry: () => ({ isAncestor: true, servedKnown: true }) });
+  assert.equal(v.value, LIVE_YES);
+  assert.match(v.why, /deployment identity/);
+  assert.match(v.why, /CONTAINS/);
+  assert.equal(f.calls[0].url, 'https://example.test/api/status', 'the probe is url+path, never the bare url');
+});
+
+T('RED-PROOF sha form FAILS on a stale release, a missing field, and a body that is not JSON; it never searches the body for a string', async () => {
+  const stale = await probeShaEcho({ config: SHA_CFG, sha: SHA, fetchImpl: fakeFetch({ status: 200, body: JSON.stringify({ release: 'old4567890' }) }), verdict: liveShaVerdict, ancestry: () => ({ isAncestor: false, servedKnown: true }) });
+  assert.equal(stale.value, LIVE_NO);
+  const missing = await probeShaEcho({ config: SHA_CFG, sha: SHA, fetchImpl: fakeFetch({ status: 200, body: JSON.stringify({ other: SHA }) }), verdict: liveShaVerdict });
+  assert.equal(missing.value, LIVE_NO);
+  const html = await probeShaEcho({ config: SHA_CFG, sha: SHA, fetchImpl: fakeFetch({ status: 200, body: `<p>${SHA}</p>` }), verdict: liveShaVerdict });
+  assert.equal(html.value, LIVE_NO, 'a sha somewhere in a non-JSON body must not pass the sha form');
+  assert.match(html.why, /not JSON/);
+  for (const v of [stale, missing, html]) assert.doesNotMatch(v.why, /best-effort/);
+});
+
+T('RED-PROOF sha form: a 404 is a no, an unreachable endpoint and an unknown served commit are skips, and no merge commit sends nothing', async () => {
+  assert.equal((await probeShaEcho({ config: SHA_CFG, sha: SHA, fetchImpl: fakeFetch({ status: 404 }), verdict: liveShaVerdict })).value, LIVE_NO);
+  const dead = await probeShaEcho({ config: SHA_CFG, sha: SHA, fetchImpl: fakeFetch({ throws: 'ECONNREFUSED' }), verdict: liveShaVerdict });
+  assert.equal(dead.value, LIVE_SKIPPED);
+  assert.match(dead.why, /a skip is not a pass/);
+  const unknown = await probeShaEcho({ config: SHA_CFG, sha: SHA, fetchImpl: fakeFetch({ status: 200, body: '{"release":"feed4567890"}' }), verdict: liveShaVerdict, ancestry: () => ({ isAncestor: false, servedKnown: false }) });
+  assert.equal(unknown.value, LIVE_SKIPPED);
+  const f = fakeFetch({ status: 200, body: '{}' });
+  assert.equal((await probeShaEcho({ config: SHA_CFG, sha: '', fetchImpl: f })).value, LIVE_SKIPPED);
+  assert.equal(f.calls.length, 0);
+});
+
+T('RED-PROOF sha form: the credential rules are the liveness probe\'s, through the shared preflight', async () => {
+  const outside = { ...SHA_CFG, auth: { kind: 'cookie', envVar: 'AWS_SECRET_ACCESS_KEY' } };
+  const f1 = fakeFetch({ status: 200, body: `{"release":"${SHA}"}` });
+  const a = await probeShaEcho({ config: outside, sha: SHA, fetchImpl: f1, env: { AWS_SECRET_ACCESS_KEY: 'AKIA-SUPERSECRET' } });
+  assert.equal(a.value, LIVE_SKIPPED);
+  assert.equal(f1.calls.length, 0);
+  assert.doesNotMatch(a.why, /AKIA-SUPERSECRET/);
+  const named = { ...SHA_CFG, auth: { kind: 'cookie', envVar: 'PANDORAS_WEB_COOKIE' } };
+  const f2 = fakeFetch({ status: 302 });
+  const c = await probeShaEcho({ config: named, sha: SHA, fetchImpl: f2, env: { PANDORAS_WEB_COOKIE: 'session=SUPERSECRET' } });
+  assert.equal(f2.calls[0].init.redirect, 'manual');
+  assert.equal(c.value, LIVE_NO);
+  assert.doesNotMatch(c.why, /SUPERSECRET/);
+});
+
+T('sha form with no injected verdict grades exact equality and says no containment check was supplied', () => {
+  assert.equal(gradeShaEcho({ status: 200, body: `{"release":"${SHA}"}`, field: 'release', sha: SHA, url: 'u' }).value, LIVE_YES);
+  const other = gradeShaEcho({ status: 200, body: '{"release":"def4567890"}', field: 'release', sha: SHA, url: 'u' });
+  assert.equal(other.value, LIVE_NO);
+  assert.match(other.why, /no containment check/);
+  assert.equal(gradeShaEcho({ status: 200, body: `{"build":{"sha":"${SHA}"}}`, field: 'build.sha', sha: SHA, url: 'u' }).value, LIVE_YES, 'a dotted field walks a nested object');
+});
+
+T('RED-PROOF header form with ancestry: a header naming a later commit that contains the lane passes, an unrelated known commit fails, an unknown one skips', () => {
+  const base = { status: 200, header: 'x-release', sha: SHA, url: 'u' };
+  const later = gradeHeaderEcho({ ...base, headerValue: 'build def4567890', ancestry: () => ({ isAncestor: true, servedKnown: true }) });
+  assert.equal(later.value, LIVE_YES);
+  assert.match(later.why, /CONTAINS/);
+  assert.equal(gradeHeaderEcho({ ...base, headerValue: 'def4567890', ancestry: () => ({ isAncestor: false, servedKnown: true }) }).value, LIVE_NO);
+  const unknown = gradeHeaderEcho({ ...base, headerValue: 'def4567890', ancestry: () => ({ isAncestor: false, servedKnown: false }) });
+  assert.equal(unknown.value, LIVE_SKIPPED);
+  assert.match(unknown.why, /git fetch/);
+  assert.equal(gradeHeaderEcho({ ...base, headerValue: 'v2.3.1', ancestry: () => ({ isAncestor: true, servedKnown: true }) }).value, LIVE_NO, 'a header with no commit id in it cannot be credited by ancestry');
+});
+
+T('RED-PROOF script form: the grade is the exit code; an undeclared script and a killed run are skips, never a no or a yes', () => {
+  const ok = scriptProofVerdict({ name: 'proof', declared: true, code: 0 });
+  assert.equal(ok.value, LIVE_YES);
+  assert.match(ok.why, /exit code/);
+  const red = scriptProofVerdict({ name: 'proof', declared: true, code: 2, tail: 'first\nlast line here' });
+  assert.equal(red.value, LIVE_NO);
+  assert.match(red.why, /exited 2/);
+  assert.match(red.why, /last line here/);
+  assert.equal(scriptProofVerdict({ name: 'proof', declared: false, code: null }).value, LIVE_SKIPPED);
+  assert.equal(scriptProofVerdict({ name: 'proof', declared: true, code: null, signal: 'SIGTERM' }).value, LIVE_SKIPPED);
+  assert.equal(scriptProofVerdict({ name: 'proof', declared: true, code: null, error: 'spawn npm ENOENT' }).value, LIVE_SKIPPED);
 });
 
 T('header form PASSES on containment: the named header carries the merge commit, and the verdict says deployment identity', async () => {

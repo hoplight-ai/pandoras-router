@@ -18,13 +18,15 @@
 //                                                       release the lane's claim, the last two under
 //                                                       the state lock in one section
 //   pandoras-router close <lane> --no-build             skip the build (records skip, not a pass)
-//   pandoras-router close <lane> --proof "<string>"     the string the liveness probe looks for,
-//                                                       overriding the policy's `expect`
+//   pandoras-router close <lane> --proof "<string>"     the string the string form looks for,
+//                                                       overriding the liveness row's `expect`;
+//                                                       unused, and said so, under any other form
 //
 // THE GATES
 //   merged        every path the branch touched is byte-identical on main (content, not ancestry)
 //   green         `npm run build` in the lane's own checkout exited 0
-//   live          the deployed surface was asked, over HTTP, and is serving this build
+//   live          the proof the repo's `verify` column names ran and passed (sha, header, string,
+//                 script), or the column says none
 //   renamed       the brief carries a closed prefix, so the next dispatch does not fire it again
 //   in-scope      every path the branch touched is inside the scope the lane declared at open
 //   findings      every `FINDING:` line carries a fix, a size and an owner
@@ -35,7 +37,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { loadPolicy, repoPolicy } from '../lib/policy.mjs';
@@ -44,7 +46,7 @@ import { readLanes, recordClose, laneKey } from '../lib/lanes.mjs';
 import { releaseClaim, claimsFile } from '../lib/claims.mjs';
 import { withLock } from '../lib/lock.mjs';
 import { git, repoDirFor, isRepo } from '../lib/gitread.mjs';
-import { probeLiveness, LIVE_SKIPPED } from '../lib/liveness.mjs';
+import { probeLiveness, probeShaEcho, probeHeaderEcho, scriptProofVerdict, LIVE_SKIPPED } from '../lib/liveness.mjs';
 import { parseFindingLines, findingsGateVerdict, ownerDecisionLines } from '../lib/finding-lines.mjs';
 import { SIDE_FILE_RE, sideFileAllowed, extractBriefTitle, noSideFilesVerdict } from '../lib/side-files-gate.mjs';
 import { findStatus } from '../lib/report-check.mjs';
@@ -52,6 +54,7 @@ import {
   classifyPath, gradeMerge, gradeGates, isBranchless, briefMatchesLaneOrKey,
   renameOnCloseVerdict, classifyPartialKind, partialStatusLabel,
   closeReportRefusal, inScopeVerdict, scopeDiffPlan,
+  liveShaVerdict, verifyFormLabel, laneCommitFor,
 } from '../lib/close.mjs';
 
 // THE WORKSPACE ROOT is the directory holding `_handoffs/` and your repos. It is NEVER the
@@ -141,19 +144,88 @@ function gateGreen(checkoutDir, run) {
 // ── GATE: live ────────────────────────────────────────────────────────────────────────────────
 //
 // THE DIFFERENTIATED ONE. Everything above measures the repository; this measures the thing a
-// person opens. It is entirely configuration-driven (POLICY.md's `liveness` table) and it SKIPS,
-// loudly and by name, when a repo declares nothing. See lib/liveness.mjs.
+// person opens. See lib/liveness.mjs and docs/LIVENESS.md.
 //
-// `gradeGates` treats `skipped` as a failure, which is the point: an unmeasured deployment cannot
-// grade DONE. A repo that genuinely has no deployed surface says so with a policy row it never
-// writes — the honest answer there is to leave it unconfigured and accept PARTIAL, or to point the
-// row at whatever artifact does prove the ship.
-async function gateLive(rp, proofOverride) {
-  const config = rp.liveness
-    ? { ...rp.liveness, expect: proofOverride ?? rp.liveness.expect }
-    : null;
-  const v = await probeLiveness({ config, repo: rp.repo });
-  return { value: v.value === LIVE_SKIPPED ? 'skip' : v.value, note: v.why };
+// THE VERIFY COLUMN IS AUTHORITATIVE (VERIFY1, 2026-09-14). The close runs the proof the repo's
+// `verify` column names, and only that one:
+//   sha:<path>:<jsonField>      probeShaEcho against the lane's commit, graded by liveShaVerdict with
+//                               git ancestry, so a later deploy on top still passes
+//   header:<path>:<headerName>  probeHeaderEcho, the same containment read from one header
+//   string                      probeLiveness on the liveness row, as before; best-effort evidence
+//   script:<name>               `npm run <name>` in the lane checkout, graded by its exit code
+//   none                        n/a, nothing probed
+// Before this the driver ignored the column and always ran the string probe, so a repo whose policy
+// named the strong form got the weak one.
+//
+// NO SILENT DOWNGRADE. When the sha or header probe cannot reach its endpoint, or the endpoint
+// answers anything but a commit, the gate records that probe's own skip or no with the reason. It
+// never falls back to the string probe: a fallback would turn "the strong proof failed" into "a weak
+// proof passed", which is the exact confusion the column exists to prevent.
+//
+// `gradeGates` treats `skip` as a failure, which is the point: an unmeasured deployment cannot
+// grade DONE.
+async function gateLive({ rp, rec, repoDir, gitRepo, checkoutDir, proofOverride }) {
+  const verify = rp.verify ?? { kind: 'none' };
+  const label = verifyFormLabel(verify);
+  const out = (v, extra = '') => ({ value: v.value === LIVE_SKIPPED ? 'skip' : v.value, note: `${label}: ${v.why}${extra}` });
+  const ignoredProof = proofOverride && verify.kind !== 'string'
+    ? ` --proof was given and was not used: it replaces the string form's expect string, and this repo's policy names the ${verify.kind} form.`
+    : '';
+
+  if (verify.kind === 'none') {
+    return { value: 'n/a', note: `${label}: the policy names no proof for ${rp.repo}, so nothing was probed. Recorded as N/A, not as a pass of a probe.${ignoredProof}` };
+  }
+
+  if (verify.kind === 'string') {
+    const config = rp.liveness ? { ...rp.liveness, expect: proofOverride ?? rp.liveness.expect } : null;
+    return out(await probeLiveness({ config, repo: rp.repo }));
+  }
+
+  if (verify.kind === 'script') {
+    const pkgPath = path.join(checkoutDir, 'package.json');
+    let declared = false;
+    try { declared = Boolean(JSON.parse(fs.readFileSync(pkgPath, 'utf8'))?.scripts?.[verify.name]); } catch { declared = false; }
+    if (!declared) return out(scriptProofVerdict({ name: verify.name, declared, code: null, checkout: checkoutDir }), ignoredProof);
+    const r = spawnSync('npm', ['run', verify.name], { cwd: checkoutDir, encoding: 'utf8', timeout: 15 * 60_000, maxBuffer: 16 * 1024 * 1024 });
+    return out(scriptProofVerdict({
+      name: verify.name,
+      declared,
+      code: r.status,
+      signal: r.signal,
+      error: r.error ? String(r.error.message ?? r.error) : null,
+      tail: `${r.stdout ?? ''}\n${r.stderr ?? ''}`,
+      checkout: checkoutDir,
+    }), ignoredProof);
+  }
+
+  // sha and header: a commit echo compared against the lane's commit by containment.
+  // A placeholder in the ledger (a dash) resolves to nothing, like any other unknown revision.
+  const resolve = (rev) => (gitRepo && rev ? git(repoDir, ['rev-parse', '--verify', '--quiet', `${rev}^{commit}`]) : null);
+  const lc = laneCommitFor({
+    landMerge: resolve(rec.land?.merge),
+    branchTip: isBranchless(rec.branch) ? null : resolve(rec.branch),
+  });
+  const sha = lc.sha ?? '';
+  const ancestry = (served) => {
+    const s = String(served ?? '').trim();
+    if (!/^[0-9a-f]{7,40}$/i.test(s)) return { isAncestor: false, servedKnown: null };
+    const known = resolve(s);
+    if (!known) return { isAncestor: false, servedKnown: false };
+    return { isAncestor: git(repoDir, ['merge-base', '--is-ancestor', sha, known]) !== null, servedKnown: true };
+  };
+  const config = {
+    url: rp.url,
+    verify,
+    auth: rp.liveness?.auth ?? null,
+    timeoutMs: rp.liveness?.timeoutMs ?? 10000,
+  };
+  const against = lc.sha ? ` Compared against ${lc.source}, ${lc.sha.slice(0, 8)}.` : ` There was nothing to compare against: ${lc.source}.`;
+  const v = verify.kind === 'sha'
+    ? await probeShaEcho({ config, sha, repo: rp.repo, verdict: liveShaVerdict, ancestry })
+    : verify.kind === 'header'
+      ? await probeHeaderEcho({ config, sha, repo: rp.repo, ancestry })
+      : { value: LIVE_SKIPPED, why: `SKIPPED: the verify form "${verify.kind}" has no probe in this driver. Nothing was measured, and a skip is not a pass.` };
+  return out(v, `${against}${ignoredProof}`);
 }
 
 async function main() {
@@ -197,7 +269,7 @@ async function main() {
   const green = gateGreen(checkoutDir, !noBuild);
 
   // ---- live
-  const live = await gateLive(rp, proofOverride);
+  const live = await gateLive({ rp, rec, repoDir, gitRepo, checkoutDir, proofOverride });
 
   // ---- in-scope
   //

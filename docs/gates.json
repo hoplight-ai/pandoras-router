@@ -48,18 +48,19 @@
       "name": "live",
       "column": "live",
       "enforced_by": "close",
-      "verdicts": ["yes", "no", "skip"],
+      "verdicts": ["yes", "no", "skip", "n/a"],
       "external_dependency": "network",
-      "tested_in": ["test/liveness-test.mjs"],
+      "tested_in": ["test/liveness-test.mjs", "test/verify-driver-test.mjs"],
       "source": [
         { "file": "src/bin/close.mjs", "function": "gateLive" },
+        { "file": "src/lib/close.mjs", "function": "liveShaVerdict" },
         { "file": "src/lib/liveness.mjs", "const": "LIVE_YES" },
         { "file": "src/lib/liveness.mjs", "const": "LIVE_NO" },
         { "file": "src/lib/liveness.mjs", "const": "LIVE_SKIPPED" }
       ],
-      "what_it_proves": "The URL in the repo's liveness policy row answered 200 within the row's timeout and, when the row names an expect string, the first 1 MB of the body carried it; the verdict sentence on that yes calls itself best-effort evidence.",
-      "what_it_does_not_prove": "That the response was this branch's build: with no expect string any 200 passes, with one the string may have been on main already or served from a cache, and the two forms that do prove identity (the sha echo and the header echo) are library functions this driver never calls.",
-      "note": "src/lib/liveness.mjs writes the word skipped and gateLive rewrites it to skip before it reaches the grader or the ledger. The shipped driver runs only probeLiveness, the URL-and-string probe, and never reads the repo's verify column in POLICY.md. The sha form (liveShaVerdict in src/lib/close.mjs), the header echo form (parseVerifyHeader, gradeHeaderEcho and probeHeaderEcho in src/lib/liveness.mjs, whose verify form parseVerify in src/lib/policy.mjs does not yet accept), the novelty rule (proofStringNovel), the string form's precedence (liveStringVerdict), the surfaces table (surfaceReach) and the second ask (deployProbePlan) are exported and tested, and none is invoked here. The grader also accepts exempt as a pass and site/gates.html describes it, but no code path in this repository writes exempt. The sources listed are the ones gateLive reaches, so the verdict set is checked against those and not against the unused forms. See docs/LIVENESS.md."
+      "what_it_proves": "The proof the repo's verify column in POLICY.md names ran and passed, and the verdict sentence names which one. sha: the JSON field at url plus path names a commit that contains the lane's commit by git ancestry. header: the named response header does the same. string: the liveness row's URL answered 200 within its timeout and the first 1 MB of the body carried the expect string, a yes that calls itself best-effort evidence. script: npm run of the named script exited 0 in the lane checkout. none: n/a, the policy names no proof.",
+      "what_it_does_not_prove": "Under the string form, that the response was this branch's build: the string may have been on main already or served from a cache. Under the script form, anything beyond what the script itself checks. Under the sha and header forms, that a squash-merged lane with no LAND record is live: its branch tip is not contained by main, so it grades no rather than yes. Under none, anything at all.",
+      "note": "src/lib/liveness.mjs writes the word skipped and gateLive rewrites it to skip before it reaches the grader or the ledger. gateLive dispatches on the repo's verify column (VERIFY1, 2026-09-14): sha calls probeShaEcho with liveShaVerdict and a git ancestry check, header calls probeHeaderEcho with the same ancestry check, string calls probeLiveness on the liveness row (the --proof flag replaces its expect string), script runs npm in the lane checkout and grades with scriptProofVerdict, none writes n/a. Each is compared against laneCommitFor's answer: the LAND record's merge commit, else the branch tip. When the sha or header probe cannot reach its endpoint or reads no commit, the gate keeps that probe's skip or no and never falls back to the string probe. An unknown verify form throws when POLICY.md loads, naming the five valid forms. Still exported, tested and not invoked here: the novelty rule (proofStringNovel), the string form's precedence (liveStringVerdict), the surfaces table (surfaceReach) and the second ask (deployProbePlan). The grader also accepts exempt as a pass and site/gates.html describes it, but no code path in this repository writes exempt. See docs/LIVENESS.md."
     },
     {
       "name": "renamed",

@@ -461,6 +461,8 @@ async function main() {
       inScope: inScope.value,
       roadmap: '-',
       kind: kind ?? '-',
+      findings: findings.value,
+      sideFiles: noSideFiles.value,
     });
     // The claim is keyed on the session the OPEN row recorded, the same join key lane-open wrote it
     // under. Released as commented history, never deleted; see releaseRewrite in lib/claims.mjs.

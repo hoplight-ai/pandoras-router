@@ -11,7 +11,7 @@
 #   OPEN  | lane | repo | branch | worktree | port | report | scope | session | ISO | base
 #   LAND  | lane | repo | branch | tip | merge | brief | report | ISO
 #   CLOSE | lane | status | merged | green | live | renamed | report-free | ISO | reason
-#         | owner-way | in-scope | roadmap | kind
+#         | owner-way | in-scope | roadmap | kind | findings | side-files
 #   NOTE  | lane | text | ISO
 #   KIND  | lane | scope|clerical | note | ISO
 #

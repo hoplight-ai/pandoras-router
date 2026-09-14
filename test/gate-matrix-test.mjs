@@ -84,8 +84,9 @@ function wordsIn(region) {
 }
 
 // ── the ledger's columns, read from lanes.mjs ─────────────────────────────────────────────────
-// The RECORD FORMS comment names the fields in order. recordClose appends `kind` after roadmap;
-// the comment does not list it, so the field is added when the append call is seen to write it.
+// The RECORD FORMS comment names the fields in order. recordClose appends `kind`, `findings` and
+// `side-files` after roadmap; the comment does not list them, so each is added when the append
+// call is seen to write it.
 
 function ledgerColumns() {
   const line = lanesSrc.split('\n').find((l) => /^\/\/\s+CLOSE\s*\|/.test(l));
@@ -93,6 +94,8 @@ function ledgerColumns() {
   const cols = line.replace(/^\/\/\s+/, '').split('|').map((s) => s.trim()).filter(Boolean).slice(1);
   const rc = sliceFunction(lanesSrc, 'recordClose', 'lanes');
   if (/r\.kind\s*\?\?\s*'-'/.test(rc)) cols.push('kind');
+  if (/r\.findings\s*\?\?\s*'-'/.test(rc)) cols.push('findings');
+  if (/r\.sideFiles\s*\?\?\s*'-'/.test(rc)) cols.push('side-files');
   return cols;
 }
 
@@ -146,6 +149,16 @@ T('columns: the matrix agrees with lanes.mjs about the comment columns and the a
   const fromComment = COLUMNS.filter((c) => !matrix.ledger.columns_appended_by_recordClose.includes(c));
   assert.deepEqual(fromComment, matrix.ledger.columns_from_comment);
   for (const c of matrix.ledger.columns_appended_by_recordClose) assert.ok(COLUMNS.includes(c), `recordClose no longer appends ${c}`);
+});
+
+T('RED-PROOF columns: every gate the close enforces writes its own ledger column', () => {
+  // COLUMNS1, 2026-09-14. findings and no-side-files used to fail silently into the CLOSE row's
+  // reason text with column: null, so a reader of the ledger could not see what they decided. This
+  // turns red the moment a close-enforced gate has no column, or names one lanes.mjs does not write.
+  for (const g of gates.filter((x) => x.enforced_by === 'close')) {
+    assert.ok(g.column !== null, `${g.name}: enforced by close but has no ledger column`);
+    assert.ok(COLUMNS.includes(g.column), `${g.name}: column "${g.column}" is not a real CLOSE-row field (${COLUMNS.join(', ')})`);
+  }
 });
 
 T('RED-PROOF columns: a row with no ledger column is one the reason text alone carries, and the matrix says so', () => {

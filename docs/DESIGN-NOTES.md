@@ -23,10 +23,15 @@ and nothing already written is touched.
 
 **Cost.** Parsing is custom, and every column added later sits at the end of the line so older
 lines still parse, which is why the CLOSE record's documentation comment and the field order have
-to be maintained by hand (`docs/gates.json` records where they currently disagree). And as of this
-writing the table writers hold no lock: two processes appending to `LANES.md` in the same instant
-can interleave. A concurrency lane (CONC1) adding one is landing alongside this document, and the
-dispatcher reconciles this wording at landing.
+to be maintained by hand (`docs/gates.json` records where they currently disagree). Plain files
+have no transactions, so every write to `CLAIMS.md` and `LANES.md` goes through one exclusive lock
+(`src/lib/lock.mjs`): an atomic create holding the holder's pid, host and time, broken with one
+printed line when the holder is dead or the lock is older than five minutes, and a temp-file-then-rename
+for the write itself. Opening a lane re-reads claims and re-checks scope inside that lock, so two
+dispatchers racing to open overlapping lanes produce one open and one refusal by name;
+`test/concurrency-test.mjs` races real processes to prove it. The lock is correct for processes
+sharing one local filesystem. It is not a coordinator for several machines or a network filesystem,
+which the threat model lists as a non-goal.
 
 ## b. Declared paths, not a dependency graph
 

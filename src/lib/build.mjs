@@ -261,6 +261,7 @@ export function runBuild(plan, opts = {}) {
         }
         if (treeKilled || !child.pid || exited) return;
         treeKilled = true;
+        if (process.env.CI) { child.kill('SIGKILL'); return; } // RED-PROOF TEMPORARY: leader only, reverted next commit
         const tk = treeKillCommand(child.pid, process.env);
         const r = spawnSyncFn(tk.command, tk.args, { stdio: 'ignore', shell: false, windowsHide: true, timeout: 30_000 });
         if (r.error || r.status !== 0) child.kill('SIGKILL');

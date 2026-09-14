@@ -6,15 +6,18 @@
 // unproven is all about the child process, not the grade: the right checkout, a captured failure, a
 // missing npm, a hung build, a killed build, unbounded output, and a green build on a base that
 // predates a neighbour's landing. None of that is visible to a unit test of a pure function, so each
-// assertion here builds a throwaway workspace from examples/, writes a fake `npm` into a directory
-// placed first on PATH, runs src/bin/close.mjs as a child process, and reads the `green` row it
-// printed.
+// assertion here builds a throwaway workspace from examples/, writes a fake npm entry point, runs
+// src/bin/close.mjs as a child process, and reads the `green` row it printed.
 //
-// THE FAKE NPM. A two-line POSIX shell script that execs this Node binary on a small script written
-// beside it. PATH for the close is that directory plus every PATH entry that holds no `npm` of its
-// own, and a symlink to the real `git` sits beside the fake, so the close still reads the repository
-// while the only npm it can find is the one the test wrote. POSIX only: on Windows the whole suite
-// prints why and runs nothing.
+// THE FAKE NPM (WIN1, 2026-09-14). The build gate runs npm as `node <npm-cli.js> run build`, finding
+// the entry point through `npm_execpath` first (src/lib/build.mjs resolveNpm). So the fake is a small
+// Node script, `fake-npm.cjs`, and the close is started with npm_execpath naming it. No shell script,
+// no PATH trick: the same fake runs on macOS, Linux and Windows, and so does every assertion here,
+// including the one that the hung build's grandchild is gone after the kill.
+//
+// NO NPM AT ALL. One case needs a Node with no npm anywhere near it: that close runs on a hard link
+// (or copy) of this Node binary in a temp directory, with npm_execpath unset and, on POSIX, a PATH
+// holding no npm (a symlink to git beside it keeps the repository readable).
 //
 // Nothing here touches a real repository or the network. Every workspace lives in the OS temp
 // directory and is removed afterwards.
@@ -39,13 +42,23 @@ const BRANCH = 'lane-green1probe';
 
 // ---------------------------------------------------------------- PATH
 
+const WIN = process.platform === 'win32';
 const isExe = (p) => {
   try { return fs.statSync(p).isFile() && (fs.accessSync(p, fs.constants.X_OK), true); } catch { return false; }
 };
 const PATH_DIRS = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
-const REAL_GIT = PATH_DIRS.map((d) => path.join(d, 'git')).find(isExe) ?? null;
-/** The close's PATH: the fake bin first, then every entry that holds no npm of its own. */
+const REAL_GIT = WIN ? null : PATH_DIRS.map((d) => path.join(d, 'git')).find(isExe) ?? null;
+/** POSIX only: a PATH of the given bin first, then every entry that holds no npm of its own. */
 const pathFor = (bin) => [bin, ...PATH_DIRS.filter((d) => !isExe(path.join(d, 'npm')))].join(path.delimiter);
+const real = (p) => fs.realpathSync.native(p);
+/** The environment every child gets: this one, minus anything that would pick an npm for it. */
+const baseEnv = () => {
+  /** @type {Record<string, string|undefined>} */
+  const e = { ...process.env };
+  delete e.npm_execpath;
+  delete e.PANDORAS_BUILD_TIMEOUT_MS;
+  return e;
+};
 
 // ---------------------------------------------------------------- the throwaway workspace
 //
@@ -56,7 +69,7 @@ const pathFor = (bin) => [bin, ...PATH_DIRS.filter((d) => !isExe(path.join(d, 'n
 const g = (dir, args) => execFileSync('git', ['-C', dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', '-c', 'commit.gpgsign=false', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
 function makeWorkspace({ stale = false } = {}) {
-  const ws = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pandoras-build-')));
+  const ws = real(fs.mkdtempSync(path.join(os.tmpdir(), 'pandoras-build-')));
   const lanes = path.join(ws, '_handoffs', '_lanes');
   fs.mkdirSync(lanes, { recursive: true });
   for (const f of ['PREFIXES.md', 'CLAIMS.md', 'LANES.md']) fs.copyFileSync(path.join(EXAMPLES, f), path.join(lanes, f));
@@ -94,15 +107,24 @@ function makeWorkspace({ stale = false } = {}) {
 
   const bin = path.join(ws, 'fakebin');
   fs.mkdirSync(bin);
-  if (REAL_GIT) fs.symlinkSync(REAL_GIT, path.join(bin, 'git'));
-  return { ws, web, lane, bin, neighbour, out: path.join(ws, 'fake-npm-ran.json') };
+  return { ws, web, lane, bin, neighbour, npm: /** @type {string|null} */ (null), out: path.join(ws, 'fake-npm-ran.json') };
 }
 
-/** Write `npm` into the fake bin: a shell script that execs this Node on `body`. */
+/** Write the fake npm entry point, `fake-npm.cjs`, which the child is pointed at via npm_execpath. */
 function fakeNpm(w, body) {
   const script = path.join(w.bin, 'fake-npm.cjs');
   fs.writeFileSync(script, `const fs = require('node:fs');\nconst OUT = ${JSON.stringify(w.out)};\nfs.writeFileSync(OUT, JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2), pid: process.pid }));\n${body}\n`);
-  fs.writeFileSync(path.join(w.bin, 'npm'), `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`, { mode: 0o755 });
+  w.npm = script;
+}
+
+/**
+ * A Node binary with no npm beside it: a hard link to this one in `dir`, or a copy when the link
+ * cannot be made (another volume). Returns its path.
+ */
+function lonelyNode(dir) {
+  const target = path.join(dir, path.basename(process.execPath));
+  try { fs.linkSync(process.execPath, target); } catch { fs.copyFileSync(process.execPath, target); }
+  return target;
 }
 
 const FAKE = {
@@ -121,13 +143,12 @@ process.exitCode = 1;`,
 };
 
 /** Run the close as a child process. Resolves, never rejects: the exit code is the assertion's business. */
-function close(w, { env = {}, killAfterMs = 60_000 } = {}) {
+function close(w, { env = {}, killAfterMs = 60_000, node = process.execPath } = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
     /** @type {Record<string, string|undefined>} */
-    const childEnv = { ...process.env, PANDORAS_ROOT: w.ws, PATH: pathFor(w.bin), ...env };
-    if (!('PANDORAS_BUILD_TIMEOUT_MS' in env)) delete childEnv.PANDORAS_BUILD_TIMEOUT_MS;
-    const child = spawn(process.execPath, [CLOSE, LANE], { cwd: w.ws, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+    const childEnv = { ...baseEnv(), PANDORAS_ROOT: w.ws, ...(w.npm ? { npm_execpath: w.npm } : {}), ...env };
+    const child = spawn(node, [CLOSE, LANE], { cwd: w.ws, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     let killed = false;
@@ -181,8 +202,8 @@ T('the build runs in the lane checkout, not the dispatcher\'s cwd and not the re
     fakeNpm(w, FAKE.ok);
     greenOf(await close(w));
     const ran = JSON.parse(fs.readFileSync(w.out, 'utf8'));
-    assert.equal(fs.realpathSync(ran.cwd), fs.realpathSync(w.lane), `the build ran in ${ran.cwd}`);
-    assert.notEqual(fs.realpathSync(ran.cwd), fs.realpathSync(w.ws), 'the build ran in the dispatcher\'s cwd');
+    assert.equal(real(ran.cwd), real(w.lane), `the build ran in ${ran.cwd}`);
+    assert.notEqual(real(ran.cwd), real(w.ws), 'the build ran in the dispatcher\'s cwd');
     assert.deepEqual(ran.argv, ['run', 'build']);
   });
 });
@@ -198,7 +219,17 @@ T('RED-PROOF exit 1: the build grades no and the close prints the failing output
   });
 });
 
-T('RED-PROOF hung build: past PANDORAS_BUILD_TIMEOUT_MS the build grades no, is killed with its process group, and the close returns in bounded time', async () => {
+/** The hung fake's child and grandchild are both gone within a few seconds. Every OS. */
+async function assertTreeGone(w) {
+  const pids = JSON.parse(fs.readFileSync(`${w.out}.pids`, 'utf8'));
+  const deadline = Date.now() + 3000;
+  while ((alive(pids.child) || alive(pids.grandchild)) && Date.now() < deadline) await new Promise((res) => setTimeout(res, 50));
+  assert.ok(!alive(pids.child), `the fake npm (pid ${pids.child}) is still running after the kill`);
+  assert.ok(!alive(pids.grandchild), `the build's own child (pid ${pids.grandchild}) survived: only the leader was killed, not the ${WIN ? 'process tree' : 'process group'}`);
+  return pids;
+}
+
+T(`RED-PROOF hung build: past PANDORAS_BUILD_TIMEOUT_MS the build grades no, is killed with its ${WIN ? 'process tree' : 'process group'} (the grandchild is gone), and the close returns in bounded time`, async () => {
   await withWorkspace({}, async (w) => {
     fakeNpm(w, FAKE.hang);
     const r = await close(w, { env: { PANDORAS_BUILD_TIMEOUT_MS: '1000' }, killAfterMs: 30_000 });
@@ -206,16 +237,10 @@ T('RED-PROOF hung build: past PANDORAS_BUILD_TIMEOUT_MS the build grades no, is 
     assert.equal(green.value, 'no', green.note);
     assert.match(green.note, /1000 ?ms|1 ?s(econd)?/, 'the verdict does not name the time limit');
     assert.match(green.note, /kill/i, 'the verdict does not say the build was killed');
+    if (WIN) assert.match(green.note, /taskkill \/T \/F/, 'on Windows the verdict does not name the tree kill');
     assert.ok(r.ms < 20_000, `the close took ${r.ms} ms against a 1 s build limit`);
-    if (process.platform === 'win32') {
-      console.log('  note: the process-group kill assertion does not apply on Windows, which has no POSIX process groups');
-      return;
-    }
-    const pids = JSON.parse(fs.readFileSync(`${w.out}.pids`, 'utf8'));
-    const deadline = Date.now() + 3000;
-    while ((alive(pids.child) || alive(pids.grandchild)) && Date.now() < deadline) await new Promise((res) => setTimeout(res, 50));
-    assert.ok(!alive(pids.child), `the fake npm (pid ${pids.child}) is still running after the close returned`);
-    assert.ok(!alive(pids.grandchild), `the build's own child (pid ${pids.grandchild}) survived: only the leader was killed, not the process group`);
+    const pids = await assertTreeGone(w);
+    console.log(`  hung build on ${process.platform}: fake npm pid ${pids.child} and its grandchild pid ${pids.grandchild} are both gone after the kill`);
   });
 });
 
@@ -232,13 +257,24 @@ T('RED-PROOF 1 MB of output: the close prints only the capped tail, ending at th
   });
 });
 
-T('RED-PROOF no npm on PATH: the gate records skip with the reason, never yes and never no', async () => {
+T('RED-PROOF no npm anywhere: the gate records skip with the reason, never yes and never no', async () => {
   await withWorkspace({}, async (w) => {
-    assert.ok(REAL_GIT, 'premise: git is on PATH');
-    const green = greenOf(await close(w));
+    const nodeDir = path.join(w.ws, 'lonely-node');
+    fs.mkdirSync(nodeDir);
+    const node = lonelyNode(nodeDir);
+    /** @type {Record<string, string|undefined>} */
+    const env = {};
+    if (!WIN) {
+      // POSIX falls back to `npm` on PATH, so PATH holds no npm; git is linked in beside the fake bin.
+      assert.ok(REAL_GIT, 'premise: git is on PATH');
+      fs.symlinkSync(REAL_GIT, path.join(w.bin, 'git'));
+      env.PATH = pathFor(w.bin);
+    }
+    const green = greenOf(await close(w, { node, env }));
     assert.equal(green.value, 'skip', green.note);
     assert.match(green.note, /npm/);
     assert.match(green.note, /not found|ENOENT/i, 'the skip does not say npm was not found');
+    if (WIN) assert.ok(green.note.includes(path.join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')), `the skip does not name the path tried beside Node: ${green.note}`);
   });
 });
 
@@ -270,20 +306,26 @@ T('fresh base: the same branch after merging main grades on its build', async ()
 
 // ---------------------------------------------------------------- the library, called directly
 //
-// The same fake npm, handed to runBuild with a PATH of its own, so the returned record (duration,
-// signal, exit code, tail) is asserted field by field rather than read back off a printed line.
+// The same fake npm, handed to runBuild through the plan's npm_execpath, so the returned record
+// (duration, signal, exit code, tail) is asserted field by field rather than read back off a
+// printed line.
 
-const { buildPlan, runBuild, buildTimeoutFrom, tailBuffer, BUILD_TIMEOUT_MS, BUILD_MAX_OUTPUT_BYTES } = await import('../src/lib/build.mjs');
+const { buildPlan, runBuild, buildTimeoutFrom, tailBuffer, resolveNpm, treeKillCommand, BUILD_TIMEOUT_MS, BUILD_MAX_OUTPUT_BYTES } = await import('../src/lib/build.mjs');
 const { freshBaseFromRevList } = await import('../src/lib/close.mjs');
 
-T('buildPlan: no build script is n/a, a missing node_modules is skip, otherwise npm run build in the checkout with the default limits', () => {
+/** A resolver that always answers `cli` beside a fixed node, for plans whose command is asserted. */
+const fixedResolver = (cli) => () => ({ command: '/n/node', args: [cli], via: /** @type {const} */ ('npm_execpath'), cli, tried: [`npm_execpath=${cli}`] });
+
+T('buildPlan: no build script is n/a, a missing node_modules is skip, otherwise node on npm-cli.js run build in the checkout with the default limits', () => {
   assert.equal(buildPlan({ checkout: '/c', pkg: null }).verdict, 'n/a');
   assert.equal(buildPlan({ checkout: '/c', pkg: { scripts: { test: 'x' } } }).verdict, 'n/a');
   assert.equal(buildPlan({ checkout: '/c', pkg: { scripts: { build: 'x' } }, nodeModules: false }).verdict, 'skip');
-  const p = buildPlan({ checkout: '/c', pkg: { scripts: { build: 'x' } }, nodeModules: true });
+  const p = buildPlan({ checkout: '/c', pkg: { scripts: { build: 'x' } }, nodeModules: true, resolve: fixedResolver('/n/npm-cli.js') });
   assert.equal(p.verdict, null);
-  assert.equal(p.command, 'npm');
-  assert.deepEqual(p.args, ['run', 'build']);
+  assert.equal(p.command, '/n/node');
+  assert.deepEqual(p.args, ['/n/npm-cli.js', 'run', 'build']);
+  assert.equal(p.npm?.via, 'npm_execpath');
+  assert.equal(p.label, 'npm run build');
   assert.equal(p.cwd, '/c');
   assert.equal(p.timeoutMs, 15 * 60_000);
   assert.equal(p.maxOutputBytes, 64 * 1024);
@@ -310,14 +352,75 @@ T('tailBuffer: keeps exactly the last N bytes across many small and one huge chu
   assert.equal(t.seen, 19 + 1003);
 });
 
-/** A bare fake bin for runBuild: no git, no workspace. */
+T('RED-PROOF resolveNpm: npm_execpath naming an existing .js or .cjs wins; anything else falls through, in the documented order', () => {
+  const has = (...files) => (p) => files.includes(p);
+  // 1. npm_execpath, when it names an existing .js / .cjs file.
+  const e = resolveNpm({ env: { npm_execpath: '/x/npm-cli.js' }, execPath: '/usr/bin/node', platform: 'linux', exists: has('/x/npm-cli.js') });
+  assert.deepEqual([e.command, e.args, e.via], ['/usr/bin/node', ['/x/npm-cli.js'], 'npm_execpath']);
+  assert.equal(resolveNpm({ env: { npm_execpath: '/x/pnpm.cjs' }, execPath: '/n', platform: 'linux', exists: has('/x/pnpm.cjs') }).via, 'npm_execpath');
+  // npm_execpath naming a missing file, or a file that is not JavaScript (npm.cmd), is not used.
+  for (const bad of ['/x/missing.js', 'C:\\n\\npm.cmd']) {
+    const r = resolveNpm({ env: { npm_execpath: bad }, execPath: '/usr/bin/node', platform: 'linux', exists: has('C:\\n\\npm.cmd') });
+    assert.notEqual(r.via, 'npm_execpath', `npm_execpath=${bad} was used`);
+    assert.equal(r.tried[0], `npm_execpath=${bad}`);
+  }
+  // 2. npm-cli.js beside the running Node: POSIX ../lib/node_modules, Windows node_modules.
+  const posixCli = '/opt/node/lib/node_modules/npm/bin/npm-cli.js';
+  const p = resolveNpm({ env: {}, execPath: '/opt/node/bin/node', platform: 'darwin', exists: has(posixCli) });
+  assert.deepEqual([p.command, p.args, p.via], ['/opt/node/bin/node', [posixCli], 'beside-node']);
+  const winCli = 'C:\\node\\node_modules\\npm\\bin\\npm-cli.js';
+  const w = resolveNpm({ env: {}, execPath: 'C:\\node\\node.exe', platform: 'win32', exists: has(winCli) });
+  assert.deepEqual([w.command, w.args, w.via], ['C:\\node\\node.exe', [winCli], 'beside-node']);
+  // 3. POSIX only: the bare npm command on PATH.
+  const bare = resolveNpm({ env: {}, execPath: '/opt/node/bin/node', platform: 'linux', exists: has() });
+  assert.deepEqual([bare.command, bare.args, bare.via], ['npm', [], 'path']);
+  assert.deepEqual(bare.tried, [posixCli, 'npm on PATH']);
+  // Windows with nothing: no command at all, never the bare name (npm.cmd will not start without a shell).
+  const none = resolveNpm({ env: { npm_execpath: 'C:\\n\\npm.cmd' }, execPath: 'C:\\node\\node.exe', platform: 'win32', exists: has() });
+  assert.equal(none.command, null);
+  assert.deepEqual(none.tried, ['npm_execpath=C:\\n\\npm.cmd', winCli]);
+});
+
+T('RED-PROOF buildPlan: npm that resolves to nothing is skip with every path tried named, and runBuild spawns nothing', async () => {
+  const nothing = () => ({ command: null, args: [], via: null, cli: null, tried: ['npm_execpath=C:\\n\\npm.cmd', 'C:\\node\\node_modules\\npm\\bin\\npm-cli.js'] });
+  const p = buildPlan({ checkout: 'C:\\c', pkg: { scripts: { build: 'x' } }, nodeModules: true, resolve: nothing });
+  assert.equal(p.verdict, 'skip');
+  assert.match(p.why, /not found/);
+  assert.ok(p.why.includes('C:\\node\\node_modules\\npm\\bin\\npm-cli.js'), p.why);
+  assert.ok(p.why.includes('npm_execpath=C:\\n\\npm.cmd'), p.why);
+  let called = false;
+  const r = await runBuild(p, { spawn: /** @type {any} */ (() => { called = true; throw new Error('must not spawn'); }) });
+  assert.equal(r.verdict, 'skip');
+  assert.equal(called, false);
+});
+
+T('treeKillCommand: taskkill by full path under SystemRoot with /pid <pid> /T /F as separate arguments', () => {
+  const full = 'C:\\Windows\\System32\\taskkill.exe';
+  assert.deepEqual(treeKillCommand(4242, { SystemRoot: 'C:\\Windows' }, (p) => p === full), { command: full, args: ['/pid', '4242', '/T', '/F'] });
+  assert.equal(treeKillCommand(1, {}, () => false).command, 'taskkill.exe');
+});
+
+T('the real resolver on this runner: under npm test npm_execpath resolves, and with it unset npm still resolves to something runnable with no shell', () => {
+  const underNpm = resolveNpm({ env: process.env });
+  const bare = resolveNpm({ env: {} });
+  console.log(`  npm on ${process.platform} (node ${process.version}): under npm test via ${underNpm.via} ${underNpm.cli ?? underNpm.command}; with npm_execpath unset via ${bare.via} ${bare.cli ?? bare.command}`);
+  if (process.env.npm_execpath && /\.c?js$/i.test(process.env.npm_execpath)) assert.equal(underNpm.via, 'npm_execpath');
+  if (WIN) {
+    assert.ok(bare.command, `on Windows npm-cli.js beside Node was not found: tried ${bare.tried.join('; ')}`);
+    assert.equal(bare.via, 'beside-node');
+  } else {
+    assert.ok(bare.command);
+  }
+});
+
+/** A bare temp directory for runBuild with the fake npm in it: no git, no workspace. */
 async function withBin(body, fn) {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pandoras-runbuild-')));
-  const w = { bin: path.join(dir, 'bin'), out: path.join(dir, 'ran.json'), dir };
+  const dir = real(fs.mkdtempSync(path.join(os.tmpdir(), 'pandoras-runbuild-')));
+  const w = { bin: path.join(dir, 'bin'), out: path.join(dir, 'ran.json'), dir, npm: /** @type {string|null} */ (null) };
   fs.mkdirSync(w.bin);
   if (body) fakeNpm(w, body);
   try {
-    await fn(w, { ...process.env, PATH: pathFor(w.bin) });
+    await fn(w, { ...baseEnv(), ...(w.npm ? { npm_execpath: w.npm } : {}) });
   } finally {
     try {
       const pids = JSON.parse(fs.readFileSync(`${w.out}.pids`, 'utf8'));
@@ -326,44 +429,56 @@ async function withBin(body, fn) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
-const planIn = (cwd) => buildPlan({ checkout: cwd, pkg: { scripts: { build: 'x' } }, nodeModules: true });
+const planIn = (cwd, env) => buildPlan({ checkout: cwd, pkg: { scripts: { build: 'x' } }, nodeModules: true, env });
 
-T('runBuild: exit 0 is yes with exit code 0, no signal, and the output kept', async () => {
+T('runBuild: exit 0 is yes with exit code 0, no signal, and the output kept; the plan is node on the fake entry point', async () => {
   await withBin(FAKE.ok, async (w, env) => {
-    const r = await runBuild(planIn(w.dir), { env });
+    const plan = planIn(w.dir, env);
+    assert.equal(plan.command, process.execPath);
+    assert.deepEqual(plan.args, [w.npm, 'run', 'build']);
+    const r = await runBuild(plan, { env });
     assert.equal(r.verdict, 'yes', r.why);
     assert.equal(r.exitCode, 0);
     assert.equal(r.signal, null);
     assert.match(r.tail, /FAKE-BUILD-OK/);
-    assert.equal(fs.realpathSync(JSON.parse(fs.readFileSync(w.out, 'utf8')).cwd), w.dir);
+    const ran = JSON.parse(fs.readFileSync(w.out, 'utf8'));
+    assert.equal(real(ran.cwd), w.dir);
+    assert.deepEqual(ran.argv, ['run', 'build']);
   });
 });
 
 T('RED-PROOF runBuild: exit 1 is no, with exit code 1 and stderr in the tail', async () => {
   await withBin(FAKE.fail, async (w, env) => {
-    const r = await runBuild(planIn(w.dir), { env });
+    const r = await runBuild(planIn(w.dir, env), { env });
     assert.equal(r.verdict, 'no');
     assert.equal(r.exitCode, 1);
     assert.match(r.tail, /compiling 3 files[\s\S]*FAKE-BUILD-FAILED/);
   });
 });
 
-T('RED-PROOF runBuild: a 1 s limit on a build that never exits is no, carries the kill signal, and returns within the limit plus the kill grace', async () => {
+T(`RED-PROOF runBuild: a 1 s limit on a build that never exits is no, ${WIN ? 'names the tree kill' : 'carries the kill signal'}, leaves no grandchild, and returns within the limit plus the kill grace`, async () => {
   await withBin(FAKE.hang, async (w, env) => {
-    const r = await runBuild(planIn(w.dir), { env, timeoutMs: 1000, killGraceMs: 500 });
+    const r = await runBuild(planIn(w.dir, env), { env, timeoutMs: 1000, killGraceMs: 500 });
     assert.equal(r.verdict, 'no', r.why);
     assert.match(r.why, /1000 ms limit/);
     assert.ok(r.durationMs >= 1000, `graded after ${r.durationMs} ms, before the limit`);
     assert.ok(r.durationMs < 1000 + 500 + 1000 + 1500, `graded after ${r.durationMs} ms`);
-    assert.ok(r.signal === 'SIGTERM' || r.signal === 'SIGKILL', `signal was ${r.signal}`);
+    if (WIN) {
+      // TerminateProcess leaves an exit code, never a signal name.
+      assert.match(r.why, /process tree was killed \(taskkill \/T \/F\)/);
+      assert.ok(r.signal === null && r.exitCode !== 0, `exit ${r.exitCode} signal ${r.signal}`);
+    } else {
+      assert.ok(r.signal === 'SIGTERM' || r.signal === 'SIGKILL', `signal was ${r.signal}`);
+    }
     assert.match(r.tail, /FAKE-BUILD-HANGING/);
+    await assertTreeGone(w);
   });
 });
 
 T('RED-PROOF runBuild: 1 MB of output on a passing build is still yes, and the tail is capped at the limit and ends at the last line', async () => {
   const body = FAKE.flood.replace('process.exitCode = 1;', 'process.exitCode = 0;');
   await withBin(body, async (w, env) => {
-    const r = await runBuild(planIn(w.dir), { env });
+    const r = await runBuild(planIn(w.dir, env), { env });
     assert.equal(r.verdict, 'yes', r.why);
     assert.ok(Buffer.byteLength(r.tail) <= 64 * 1024, `tail is ${Buffer.byteLength(r.tail)} bytes`);
     assert.ok(Buffer.byteLength(r.tail) > 60 * 1024, 'the tail kept far less than the cap');
@@ -372,9 +487,12 @@ T('RED-PROOF runBuild: 1 MB of output on a passing build is still yes, and the t
   });
 });
 
-T('RED-PROOF runBuild: npm missing from PATH is skip with ENOENT named, never yes and never no', async () => {
+T('RED-PROOF runBuild: the bare npm fallback with no npm on PATH is skip with ENOENT named, never yes and never no', async () => {
   await withBin(null, async (w, env) => {
-    const r = await runBuild(planIn(w.dir), { env });
+    const bareNpm = () => ({ command: 'npm', args: [], via: /** @type {const} */ ('path'), cli: null, tried: ['npm on PATH'] });
+    const plan = buildPlan({ checkout: w.dir, pkg: { scripts: { build: 'x' } }, nodeModules: true, env, resolve: bareNpm });
+    // POSIX: a PATH with no npm on it. Windows: spawn with no shell never finds npm.cmd by the bare name.
+    const r = await runBuild(plan, { env: WIN ? env : { ...env, PATH: pathFor(w.bin) } });
     assert.equal(r.verdict, 'skip', r.why);
     assert.match(r.why, /not found on PATH \(ENOENT\)/);
     assert.equal(r.exitCode, null);
@@ -403,17 +521,13 @@ T('RED-PROOF freshBaseFromRevList: a neighbour commit is not fresh and is named;
 
 // ---------------------------------------------------------------- run
 
-if (process.platform === 'win32') {
-  console.log('BUILD GATE ASSERTIONS  0 run: the fake npm executables are POSIX shell scripts and the process-group kill is POSIX, so this suite runs on macOS and Linux only.');
-} else {
-  let pass = 0;
-  const fails = [];
-  for (const t of tests) {
-    try { await t.fn(); pass++; } catch (e) { fails.push({ name: t.name, message: e.message }); }
-  }
-  for (const f of fails) console.log(`FAIL  ${f.name}\n      ${String(f.message).split('\n')[0]}`);
-  const red = tests.filter((t) => t.name.startsWith('RED-PROOF')).length;
-  console.log(`BUILD GATE ASSERTIONS  ${pass}/${tests.length} pass, ${fails.length} fail`);
-  console.log(`  ${red} of them are RED-PROOF: each asserts a no, a skip or a refused limit that a weaker gate would read as a pass or never return; the first five run the real close driver against a fake npm.`);
-  if (fails.length) throw new Error(`build-gate-test.mjs: ${fails.length}/${tests.length} assertion(s) failed.`);
+let pass = 0;
+const fails = [];
+for (const t of tests) {
+  try { await t.fn(); pass++; } catch (e) { fails.push({ name: t.name, message: e.message }); }
 }
+for (const f of fails) console.log(`FAIL  ${f.name}\n      ${String(f.message).split('\n')[0]}`);
+const red = tests.filter((t) => t.name.startsWith('RED-PROOF')).length;
+console.log(`BUILD GATE ASSERTIONS  ${pass}/${tests.length} pass, ${fails.length} fail (on ${process.platform})`);
+console.log(`  ${red} of them are RED-PROOF: each asserts a no, a skip or a refused limit that a weaker gate would read as a pass or never return; the first eight run the real close driver against a fake npm.`);
+if (fails.length) throw new Error(`build-gate-test.mjs: ${fails.length}/${tests.length} assertion(s) failed.`);

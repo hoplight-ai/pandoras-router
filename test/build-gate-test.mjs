@@ -124,6 +124,7 @@ process.exitCode = 1;`,
 function close(w, { env = {}, killAfterMs = 60_000 } = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
+    /** @type {Record<string, string|undefined>} */
     const childEnv = { ...process.env, PANDORAS_ROOT: w.ws, PATH: pathFor(w.bin), ...env };
     if (!('PANDORAS_BUILD_TIMEOUT_MS' in env)) delete childEnv.PANDORAS_BUILD_TIMEOUT_MS;
     const child = spawn(process.execPath, [CLOSE, LANE], { cwd: w.ws, env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });

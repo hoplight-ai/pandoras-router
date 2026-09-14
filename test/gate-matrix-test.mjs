@@ -292,6 +292,35 @@ T('RED-PROOF live: the driver dispatches on every verify form, never falls back 
   assert.doesNotMatch(doc, /driver never reads the repo's `verify` column/, 'LIVENESS.md still says the driver ignores the verify column');
 });
 
+T('RED-PROOF green: the driver checks the fresh base before it builds, builds only through the bounded runner, and the documents state the limits', () => {
+  // GREEN1, 2026-09-14. freshBaseVerdict sat in the library while the driver never called it, and the
+  // build ran through an unbounded execFileSync whose failure text was thrown away. This holds the
+  // order (base, then build) and the runner in place, and keeps the matrix, the threat model and the
+  // README describing the gate that ships.
+  const green = sliceFunction(binSrc, 'gateGreen', 'bin');
+  const baseAt = green.indexOf('freshBaseFromRevList(');
+  const runAt = green.indexOf('runBuild(');
+  assert.ok(baseAt >= 0, 'gateGreen no longer checks the fresh base');
+  assert.ok(runAt > baseAt, 'gateGreen runs the build before it checks the fresh base');
+  assert.match(green, /buildPlan\(/, 'gateGreen no longer plans the build through lib/build.mjs');
+  assert.doesNotMatch(binSrc, /execFileSync\(\s*'npm'/, 'the driver runs npm through execFileSync again, outside the time limit and the output cap');
+  assert.match(sliceFunction(libSrc, 'freshBaseFromRevList', 'lib'), /freshBaseVerdict\(/, 'freshBaseFromRevList no longer decides through freshBaseVerdict');
+  const build = read('src/lib/build.mjs');
+  assert.match(sliceFunction(build, 'runBuild', 'build'), /process\.kill\(-child\.pid/, 'runBuild no longer kills the process group');
+  assert.match(sliceFunction(build, 'runBuild', 'build'), /shell: false/, 'runBuild no longer spawns without a shell');
+
+  const row = byName.get('green');
+  assert.ok(Array.isArray(row.tested_in) && row.tested_in.includes('test/build-gate-test.mjs'), 'the green row does not name test/build-gate-test.mjs');
+  assert.doesNotMatch(`${row.what_it_does_not_prove} ${row.note}`, /does not call/, 'docs/gates.json still says the driver does not call the fresh-base rule');
+  for (const word of ['15 minutes', 'PANDORAS_BUILD_TIMEOUT_MS', '64 KB']) {
+    assert.ok(row.note.includes(word), `the green row's note does not state ${word}`);
+    assert.ok(read('docs/THREAT-MODEL.md').includes(word), `docs/THREAT-MODEL.md does not state ${word}`);
+  }
+  const readme = read('README.md');
+  assert.match(readme, /15-minute time limit \(`PANDORAS_BUILD_TIMEOUT_MS` overrides it\)/, 'the README does not state the build time limit the code ships');
+  assert.match(readme, /A green build only counts\s+on a fresh base/, 'the README does not state the fresh-base rule');
+});
+
 // ── the prose documents point at files that exist ────────────────────────────────────────────
 // A hook renamed from .sh to .mjs left three stale paths in these documents once. A path a reader
 // cannot open is a claim nobody can check, so every repo path the documents name must exist.

@@ -117,7 +117,7 @@ An agent says it finished. `close` finds out. The shipped driver measures seven 
 | gate | what it measures |
 |---|---|
 | `merged` | every path the branch touched is byte-identical on main, compared blob by blob rather than by git ancestry, because a squash merge throws the fingerprints away |
-| `green` | `npm run build` in the lane's own checkout exited 0 |
+| `green` | the branch contains main's head, then `npm run build` in the lane's own checkout exited 0 inside the time limit |
 | `live` | the proof the repo's `verify` policy names ran and passed: a commit echo, a served string, or a script (see below for how strong each is) |
 | `renamed` | the brief carries a closed prefix, so the next dispatch does not fire it a second time |
 | `in-scope` | every path the branch touched is inside the scope the lane declared at open |
@@ -312,10 +312,15 @@ surprise on the day it matters.
   short-lived `.lock.break` file guards the break. It is a lock for one local filesystem, not for a
   network share.
 - **`close` runs the branch's own `npm run build` on the dispatcher's machine**, in the lane's
-  checkout, with a 15-minute timeout. That is what a build gate is, and it means a lane's
-  `package.json` runs code where the close runs, with the close's permissions and no sandbox. Do not
-  close a branch you would not build. A checkout with no `build` script records `n/a`; one with no
-  `node_modules`, or a close run with `--no-build`, records `skip`, which is not a pass.
+  checkout, with a 15-minute time limit (`PANDORAS_BUILD_TIMEOUT_MS` overrides it). Past the limit
+  the build's whole process group is killed and the gate records `no`; only the last 64 KB of its
+  output is kept, and the close prints that tail when the build fails. That is what a build gate
+  is, and it means a lane's `package.json` runs code where the close runs, with the close's
+  permissions and no sandbox. Do not close a branch you would not build. A green build only counts
+  on a fresh base: a branch missing commits that landed on main, other than its own landing merge,
+  records `no` with those commits named and the build is not run. A checkout with no `build` script
+  records `n/a`; one with no `node_modules`, npm missing from PATH, or a close run with
+  `--no-build`, records `skip`, which is not a pass.
 - **The two command guards in `hooks/`, `guard-irreversible.mjs` and `guard-report-overwrite.mjs`,
   are Node pattern matchers.** They use Node built-ins only and need nothing else on the path: no
   bash, no Python. The irreversible-action guard refuses what it can see on the command line or in

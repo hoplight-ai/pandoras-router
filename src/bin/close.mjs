@@ -24,7 +24,8 @@
 //
 // THE GATES
 //   merged        every path the branch touched is byte-identical on main (content, not ancestry)
-//   green         `npm run build` in the lane's own checkout exited 0
+//   green         the branch contains the base's head, then `npm run build` in the lane's own
+//                 checkout exited 0 inside the time limit (lib/build.mjs)
 //   live          the proof the repo's `verify` column names ran and passed (sha, header, string,
 //                 script), or the column says none
 //   renamed       the brief carries a closed prefix, so the next dispatch does not fire it again

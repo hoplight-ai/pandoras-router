@@ -55,7 +55,8 @@ T('filterEnvLines keeps only listed keys, drops comments and blanks, preserves f
   const { lines, found, missing } = filterEnvLines(FIXTURE_ENV, ['BETA_KEY', 'ALPHA_KEY']);
   // The allowlist is given BETA-then-ALPHA; the source file has ALPHA before BETA. The result must
   // follow the SOURCE's order, not the allowlist's.
-  assert.deepEqual(lines, ['ALPHA_KEY=one', 'BETA_KEY=two']);
+  // CI1 RED PROOF: deliberately wrong expected order, reverted in the next commit on this branch.
+  assert.deepEqual(lines, ['BETA_KEY=two', 'ALPHA_KEY=one']);
   assert.deepEqual(found.sort(), ['ALPHA_KEY', 'BETA_KEY']);
   assert.deepEqual(missing, []);
 });

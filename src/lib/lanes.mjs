@@ -31,6 +31,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 // Imported, never restated: ORPHANED is STALE-CLAIM one layer up and the two must not drift.
 import { CLAIM_ACTIVE_HOURS } from './claims.mjs';
+import { withLock, writeStateFile } from './lock.mjs';
 
 export function lanesFile(root) {
   return path.join(root, '_handoffs', '_lanes', 'LANES.md');
@@ -55,16 +56,28 @@ const HEADER = `# LANES — append-only ledger of every lane this router opened 
 
 function ensure(root) {
   const file = lanesFile(root);
-  if (!fs.existsSync(file)) fs.writeFileSync(file, HEADER);
+  if (!fs.existsSync(file)) writeStateFile(root, file, HEADER);
   return file;
 }
 
+/**
+ * Append one record. UNDER THE STATE LOCK, and atomically (CONC1, 2026-09-14).
+ *
+ * This was read, concatenate, writeFileSync with nothing between the read and the write, so two
+ * appends landing together lost one record, and a reader arriving while writeFileSync had truncated
+ * the file read nothing and wrote nothing back, header included. The read and the write now sit in
+ * one locked section, and the write is a temporary sibling renamed over the ledger, so no reader sees
+ * a half-written file. Re-entrant: a caller already holding the lock (lane-open's compare-and-set,
+ * the close's CLOSE-and-release) appends inside its own section.
+ */
 export function append(root, fields) {
-  const file = ensure(root);
-  const line = fields.map((f) => String(f ?? '')).join(' | ');
-  const before = fs.readFileSync(file, 'utf8');
-  fs.writeFileSync(file, before.endsWith('\n') ? `${before}${line}\n` : `${before}\n${line}\n`);
-  return line;
+  return withLock(root, () => {
+    const file = ensure(root);
+    const line = fields.map((f) => String(f ?? '')).join(' | ');
+    const before = fs.readFileSync(file, 'utf8');
+    writeStateFile(root, file, before.endsWith('\n') ? `${before}${line}\n` : `${before}\n${line}\n`);
+    return line;
+  });
 }
 
 /**

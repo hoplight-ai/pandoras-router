@@ -37,7 +37,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { loadPolicy, repoPolicy } from '../lib/policy.mjs';
@@ -54,8 +54,9 @@ import {
   classifyPath, gradeMerge, gradeGates, isBranchless, briefMatchesLaneOrKey,
   renameOnCloseVerdict, classifyPartialKind, partialStatusLabel,
   closeReportRefusal, inScopeVerdict, scopeDiffPlan,
-  liveShaVerdict, verifyFormLabel, laneCommitFor,
+  liveShaVerdict, verifyFormLabel, laneCommitFor, freshBaseFromRevList,
 } from '../lib/close.mjs';
+import { buildPlan, runBuild } from '../lib/build.mjs';
 
 // THE WORKSPACE ROOT is the directory holding `_handoffs/` and your repos. It is NEVER the
 // package's own install location, so it comes from $PANDORAS_ROOT or the current directory.
@@ -121,24 +122,39 @@ function mergeNote(g, total, BASE) {
 //
 // THE TEST IS A `build` SCRIPT, NOT A package.json. Plenty of repos have the second and not the
 // first.
-function gateGreen(checkoutDir, run) {
-  const pkgPath = path.join(checkoutDir, 'package.json');
-  let buildScript = null;
-  if (fs.existsSync(pkgPath)) {
-    try { buildScript = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))?.scripts?.build ?? null; } catch { buildScript = null; }
+//
+// A GREEN BUILD ONLY COUNTS ON A FRESH BASE (GREEN1, 2026-09-14). Before anything runs, the branch
+// must contain the base's head, its own landing merge excused (freshBaseFromRevList in
+// lib/close.mjs). A stale base grades no with the missing commits named and the build is not run: a
+// build of one half proves nothing about the union. An unmeasured base is a skip.
+//
+// THE RUN IS BOUNDED (lib/build.mjs): no shell, a time limit that kills the process group, and only
+// the last 64 KB of output kept. A timeout or a signal is no; npm missing from PATH is skip.
+async function gateGreen({ checkoutDir, run, repoDir, gitRepo, rec, BASE }) {
+  let pkg = null;
+  try { pkg = JSON.parse(fs.readFileSync(path.join(checkoutDir, 'package.json'), 'utf8')); } catch { pkg = null; }
+  const plan = buildPlan({ checkout: checkoutDir, pkg, nodeModules: fs.existsSync(path.join(checkoutDir, 'node_modules')), env: process.env });
+  if (plan.verdict === 'n/a') return { value: plan.verdict, note: plan.why, tail: '' };
+
+  let baseNote = '';
+  if (gitRepo && !isBranchless(rec.branch)) {
+    const landMerge = rec.land?.merge ? git(repoDir, ['rev-parse', '--verify', '--quiet', `${rec.land.merge}^{commit}`]) : null;
+    const base = freshBaseFromRevList({
+      listed: git(repoDir, ['rev-list', '--parents', `${rec.branch}..${BASE}`]),
+      land: rec.land ? { tip: rec.land.tip, merge: landMerge ?? rec.land.merge } : null,
+      isInBranch: (sha) => git(repoDir, ['merge-base', '--is-ancestor', sha, rec.branch]) !== null,
+      base: BASE,
+    });
+    if (base.fresh === null) return { value: 'skip', note: `SKIP: ${base.why}. The build was not run. A skip is not a pass.`, tail: '' };
+    if (!base.fresh) return { value: 'no', note: `fresh base: ${base.why} The build was not run.`, tail: '' };
+    baseNote = `; fresh base: ${base.why}`;
   }
-  if (!buildScript)
-    return { value: 'n/a', note: `${path.basename(checkoutDir)} has no \`build\` script, so there is no build to run. Recorded as N/A, not as a skip — nothing was left unmeasured.` };
-  if (!fs.existsSync(path.join(checkoutDir, 'node_modules')))
-    return { value: 'skip', note: `SKIP: ${checkoutDir} has no node_modules, so the build could not run. Install first (\`npm --prefix <checkout> ci\`, or open the lane with --install). A skip is not a pass.` };
+
+  if (plan.verdict) return { value: plan.verdict, note: plan.why, tail: '' };
   if (!run)
-    return { value: 'skip', note: 'SKIP: --no-build was passed, so no build was run. A skip is not a pass.' };
-  try {
-    execFileSync('npm', ['run', 'build'], { cwd: checkoutDir, stdio: 'ignore', timeout: 15 * 60_000 });
-    return { value: 'yes', note: 'npm run build exited 0' };
-  } catch (e) {
-    return { value: 'no', note: `npm run build failed: ${String(e.message).slice(0, 200)}` };
-  }
+    return { value: 'skip', note: 'SKIP: --no-build was passed, so no build was run. A skip is not a pass.', tail: '' };
+  const r = await runBuild(plan);
+  return { value: r.verdict, note: `${r.why}${baseNote}`, tail: r.tail };
 }
 
 // ── GATE: live ────────────────────────────────────────────────────────────────────────────────
@@ -266,7 +282,7 @@ async function main() {
 
   // ---- green
   const checkoutDir = rec.worktree && rec.worktree !== '-' ? path.resolve(ROOT, rec.worktree) : repoDir;
-  const green = gateGreen(checkoutDir, !noBuild);
+  const green = await gateGreen({ checkoutDir, run: !noBuild, repoDir, gitRepo, rec, BASE });
 
   // ---- live
   const live = await gateLive({ rp, rec, repoDir, gitRepo, checkoutDir, proofOverride });
@@ -380,6 +396,10 @@ async function main() {
   ];
   console.log(`close ${rec.lane} (${rec.repo})${apply ? '' : ' — MEASURE ONLY, nothing written'}`);
   for (const [name, value, note] of rows) console.log(`  ${name.padEnd(14)} ${String(value).padEnd(8)} ${note}`);
+  if (green.value === 'no' && green.tail) {
+    console.log(`  build output, the last ${Buffer.byteLength(green.tail)} bytes npm run build printed:`);
+    for (const l of green.tail.replace(/\n$/, '').split('\n')) console.log(`    | ${l}`);
+  }
 
   const kind = classifyPartialKind({ failed: graded.failed, reportStatusWord: statusWordOf(reportText) }).kind;
   console.log(`  STATUS         ${partialStatusLabel(graded.status, kind)}`);

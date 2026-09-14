@@ -193,7 +193,7 @@ T('RED-PROOF exit 1: the build grades no and the close prints the failing output
     const green = greenOf(r);
     assert.equal(green.value, 'no', green.note);
     assert.match(r.stdout, /FAKE-BUILD-FAILED src\/app\.ts\(3,7\): error TS2322/, 'the close did not print the build\'s failing output');
-    assert.match(green.note, /exit(ed)? (code )?1/, 'the verdict does not name the exit code');
+    assert.match(green.note, /exit(ed)? (with )?(code )?1\b/, 'the verdict does not name the exit code');
   });
 });
 
@@ -267,6 +267,139 @@ T('fresh base: the same branch after merging main grades on its build', async ()
   });
 });
 
+// ---------------------------------------------------------------- the library, called directly
+//
+// The same fake npm, handed to runBuild with a PATH of its own, so the returned record (duration,
+// signal, exit code, tail) is asserted field by field rather than read back off a printed line.
+
+const { buildPlan, runBuild, buildTimeoutFrom, tailBuffer, BUILD_TIMEOUT_MS, BUILD_MAX_OUTPUT_BYTES } = await import('../src/lib/build.mjs');
+const { freshBaseFromRevList } = await import('../src/lib/close.mjs');
+
+T('buildPlan: no build script is n/a, a missing node_modules is skip, otherwise npm run build in the checkout with the default limits', () => {
+  assert.equal(buildPlan({ checkout: '/c', pkg: null }).verdict, 'n/a');
+  assert.equal(buildPlan({ checkout: '/c', pkg: { scripts: { test: 'x' } } }).verdict, 'n/a');
+  assert.equal(buildPlan({ checkout: '/c', pkg: { scripts: { build: 'x' } }, nodeModules: false }).verdict, 'skip');
+  const p = buildPlan({ checkout: '/c', pkg: { scripts: { build: 'x' } }, nodeModules: true });
+  assert.equal(p.verdict, null);
+  assert.equal(p.command, 'npm');
+  assert.deepEqual(p.args, ['run', 'build']);
+  assert.equal(p.cwd, '/c');
+  assert.equal(p.timeoutMs, 15 * 60_000);
+  assert.equal(p.maxOutputBytes, 64 * 1024);
+  assert.equal(BUILD_TIMEOUT_MS, 15 * 60_000);
+  assert.equal(BUILD_MAX_OUTPUT_BYTES, 64 * 1024);
+});
+
+T('RED-PROOF limits: PANDORAS_BUILD_TIMEOUT_MS overrides the time limit, and a value that is not a positive whole number is refused with the reason, never read as zero', () => {
+  assert.equal(buildTimeoutFrom({ PANDORAS_BUILD_TIMEOUT_MS: '2500' }).timeoutMs, 2500);
+  for (const bad of ['0', '-5', 'ten', '1.5']) {
+    const t = buildTimeoutFrom({ PANDORAS_BUILD_TIMEOUT_MS: bad });
+    assert.equal(t.timeoutMs, BUILD_TIMEOUT_MS, `"${bad}" changed the limit`);
+    assert.match(t.note ?? '', /not a positive whole number/);
+  }
+  assert.equal(buildPlan({ checkout: '/c', pkg: { scripts: { build: 'x' } }, env: { PANDORAS_BUILD_TIMEOUT_MS: '1000' } }).timeoutMs, 1000);
+});
+
+T('tailBuffer: keeps exactly the last N bytes across many small and one huge chunk', () => {
+  const t = tailBuffer(10);
+  for (const c of ['abc', 'defg', 'hijklmnop', 'qrs']) t.push(c);
+  assert.equal(t.text(), 'jklmnopqrs');
+  t.push('Z'.repeat(1000) + 'END');
+  assert.equal(t.text(), 'ZZZZZZZEND');
+  assert.equal(t.seen, 19 + 1003);
+});
+
+/** A bare fake bin for runBuild: no git, no workspace. */
+async function withBin(body, fn) {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pandoras-runbuild-')));
+  const w = { bin: path.join(dir, 'bin'), out: path.join(dir, 'ran.json'), dir };
+  fs.mkdirSync(w.bin);
+  if (body) fakeNpm(w, body);
+  try {
+    await fn(w, { ...process.env, PATH: pathFor(w.bin) });
+  } finally {
+    try {
+      const pids = JSON.parse(fs.readFileSync(`${w.out}.pids`, 'utf8'));
+      for (const pid of [pids.child, pids.grandchild]) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+    } catch { /* no pids file */ }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+const planIn = (cwd) => buildPlan({ checkout: cwd, pkg: { scripts: { build: 'x' } }, nodeModules: true });
+
+T('runBuild: exit 0 is yes with exit code 0, no signal, and the output kept', async () => {
+  await withBin(FAKE.ok, async (w, env) => {
+    const r = await runBuild(planIn(w.dir), { env });
+    assert.equal(r.verdict, 'yes', r.why);
+    assert.equal(r.exitCode, 0);
+    assert.equal(r.signal, null);
+    assert.match(r.tail, /FAKE-BUILD-OK/);
+    assert.equal(fs.realpathSync(JSON.parse(fs.readFileSync(w.out, 'utf8')).cwd), w.dir);
+  });
+});
+
+T('RED-PROOF runBuild: exit 1 is no, with exit code 1 and stderr in the tail', async () => {
+  await withBin(FAKE.fail, async (w, env) => {
+    const r = await runBuild(planIn(w.dir), { env });
+    assert.equal(r.verdict, 'no');
+    assert.equal(r.exitCode, 1);
+    assert.match(r.tail, /compiling 3 files[\s\S]*FAKE-BUILD-FAILED/);
+  });
+});
+
+T('RED-PROOF runBuild: a 1 s limit on a build that never exits is no, carries the kill signal, and returns within the limit plus the kill grace', async () => {
+  await withBin(FAKE.hang, async (w, env) => {
+    const r = await runBuild(planIn(w.dir), { env, timeoutMs: 1000, killGraceMs: 500 });
+    assert.equal(r.verdict, 'no', r.why);
+    assert.match(r.why, /1000 ms limit/);
+    assert.ok(r.durationMs >= 1000, `graded after ${r.durationMs} ms, before the limit`);
+    assert.ok(r.durationMs < 1000 + 500 + 1000 + 1500, `graded after ${r.durationMs} ms`);
+    assert.ok(r.signal === 'SIGTERM' || r.signal === 'SIGKILL', `signal was ${r.signal}`);
+    assert.match(r.tail, /FAKE-BUILD-HANGING/);
+  });
+});
+
+T('RED-PROOF runBuild: 1 MB of output on a passing build is still yes, and the tail is capped at the limit and ends at the last line', async () => {
+  const body = FAKE.flood.replace('process.exitCode = 1;', 'process.exitCode = 0;');
+  await withBin(body, async (w, env) => {
+    const r = await runBuild(planIn(w.dir), { env });
+    assert.equal(r.verdict, 'yes', r.why);
+    assert.ok(Buffer.byteLength(r.tail) <= 64 * 1024, `tail is ${Buffer.byteLength(r.tail)} bytes`);
+    assert.ok(Buffer.byteLength(r.tail) > 60 * 1024, 'the tail kept far less than the cap');
+    assert.match(r.tail, /TAIL-MARKER-LAST-LINE\n$/);
+    assert.doesNotMatch(r.tail, /HEAD-MARKER/);
+  });
+});
+
+T('RED-PROOF runBuild: npm missing from PATH is skip with ENOENT named, never yes and never no', async () => {
+  await withBin(null, async (w, env) => {
+    const r = await runBuild(planIn(w.dir), { env });
+    assert.equal(r.verdict, 'skip', r.why);
+    assert.match(r.why, /not found on PATH \(ENOENT\)/);
+    assert.equal(r.exitCode, null);
+  });
+});
+
+T('runBuild: a plan that already carries a verdict runs nothing and returns that verdict', async () => {
+  let called = false;
+  const spy = /** @type {any} */ (() => { called = true; throw new Error('must not spawn'); });
+  const r = await runBuild(buildPlan({ checkout: '/c', pkg: null }), { spawn: spy });
+  assert.equal(r.verdict, 'n/a');
+  assert.equal(called, false);
+});
+
+T('RED-PROOF freshBaseFromRevList: a neighbour commit is not fresh and is named; an empty list is fresh; the lane\'s own landing merge is excused; git failure is unmeasured', () => {
+  const stale = freshBaseFromRevList({ listed: 'abcdef1234567890 1111111111111111\n', isInBranch: () => false, base: 'main' });
+  assert.equal(stale.fresh, false);
+  assert.deepEqual(stale.missing, ['abcdef1234567890']);
+  assert.match(stale.why, /abcdef12/);
+  assert.doesNotMatch(stale.why, /origin\/main/, 'the reason names a ref this repo does not use');
+  assert.equal(freshBaseFromRevList({ listed: '', isInBranch: () => false }).fresh, true);
+  const landed = freshBaseFromRevList({ listed: 'L M0 T', land: { tip: 'T', merge: 'L' }, isInBranch: (s) => s === 'T' });
+  assert.equal(landed.fresh, true, landed.why);
+  assert.equal(freshBaseFromRevList({ listed: null, isInBranch: () => true }).fresh, null);
+});
+
 // ---------------------------------------------------------------- run
 
 if (process.platform === 'win32') {
@@ -280,6 +413,6 @@ if (process.platform === 'win32') {
   for (const f of fails) console.log(`FAIL  ${f.name}\n      ${String(f.message).split('\n')[0]}`);
   const red = tests.filter((t) => t.name.startsWith('RED-PROOF')).length;
   console.log(`BUILD GATE ASSERTIONS  ${pass}/${tests.length} pass, ${fails.length} fail`);
-  console.log(`  ${red} of them are RED-PROOF: each runs the real close driver against a fake npm and asserts a no or a skip that a weaker gate would read as a pass or never return.`);
+  console.log(`  ${red} of them are RED-PROOF: each asserts a no, a skip or a refused limit that a weaker gate would read as a pass or never return; the first five run the real close driver against a fake npm.`);
   if (fails.length) throw new Error(`build-gate-test.mjs: ${fails.length}/${tests.length} assertion(s) failed.`);
 }

@@ -1,13 +1,19 @@
-// guards-test.mjs — the two shell refusal guards, driven with synthetic hook payloads.
+// guards-test.mjs — the two Node refusal guards, driven with synthetic hook payloads.
 //
 // WHAT A GUARD IS WORTH IS WHAT IT REFUSES. Every RED-PROOF below feeds a guard the exact input
 // that once walked past it and asserts the deny JSON comes back. The ALLOW cases are load-bearing
 // too: a guard that fires on ordinary work gets muted within a week, so each one pins a routine
 // command the guard must stay out of.
 //
+// The guards were Bash scripts with inline Python until 2026-09-14; the same payloads ran against
+// those and pass against the Node port, which is the parity claim. Point PANDORAS_GUARDS_DIR at
+// any copy of the guards to prove it refuses what this one refuses.
+//
 // No payload carries a session id, so no guard-log.jsonl line is ever written by this suite.
 // No payload carries a transcript path unless the assertion is about the unlock phrase, in which
-// case the transcript is a temp file this suite writes and removes.
+// case the transcript is a temp file this suite writes and removes. The unlock phrase has no
+// default, so every unlock assertion sets PANDORAS_UNLOCK_PHRASE itself, and the runner strips
+// the operator's own value from the environment so the suite reads the same on every machine.
 
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -20,19 +26,29 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 // PANDORAS_GUARDS_DIR points the same payloads at another copy of the guards (a fork, an installed
 // copy), so an adopter can prove their copy refuses what this one refuses.
 const GUARDS = process.env.PANDORAS_GUARDS_DIR ? path.resolve(process.env.PANDORAS_GUARDS_DIR) : path.join(HERE, '..', 'hooks');
-const IRREVERSIBLE = path.join(GUARDS, 'guard-irreversible.sh');
-const OVERWRITE = path.join(GUARDS, 'guard-report-overwrite.sh');
-const BASH = fs.existsSync('/bin/bash') ? '/bin/bash' : 'bash';
+const IRREVERSIBLE = path.join(GUARDS, 'guard-irreversible.mjs');
+const OVERWRITE = path.join(GUARDS, 'guard-report-overwrite.mjs');
 
 const tests = [];
 const T = (name, fn) => tests.push({ name, fn });
 
-/** Run a guard with one hook payload. Returns the permission decision, or `allow` on silence. */
+// The two variables the guards read. Whatever the operator's shell has set is removed before each
+// run, so an assertion sees only what it passes in `env` and the suite cannot pass on one machine
+// and fail on the next.
+const GUARD_ENV = ['PANDORAS_UNLOCK_PHRASE', 'PANDORAS_BRIDGE_FURNITURE'];
+const baseEnv = () => {
+  const e = { ...process.env };
+  for (const k of GUARD_ENV) delete e[k];
+  return e;
+};
+
+/** Run a guard with one hook payload (an object, or a raw string sent as-is to prove the
+ *  malformed-input branch). Returns the permission decision, or `allow` on silence. */
 function run(script, payload, { env = {} } = {}) {
-  const r = spawnSync(BASH, [script], {
-    input: JSON.stringify(payload),
+  const r = spawnSync(process.execPath, [script], {
+    input: typeof payload === 'string' ? payload : JSON.stringify(payload),
     encoding: 'utf8',
-    env: { ...process.env, ...env },
+    env: { ...baseEnv(), ...env },
   });
   const out = String(r.stdout ?? '').trim();
   if (!out) return { decision: 'allow', reason: '', status: r.status };
@@ -162,19 +178,35 @@ T('RED-PROOF B8: `supabase projects delete` and `supabase branches delete` are r
 T('RED-PROOF B9: `git config alias.x "push --force"; git x` is refused', () =>
   deny(IRREVERSIBLE, bash("git config alias.yolo 'push --force origin main'; git yolo")));
 
-// ---------------------------------------------------------------- B10: no python3 must FAIL CLOSED
-T('RED-PROOF B10: with no python3 on PATH the guard refuses rather than allowing', () => {
-  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-nopy-'));
+// ---------------------------------------------------------------- B10: no python3, no bash, still a verdict
+// The shell guards needed python3 on PATH and failed closed without it. The port needs nothing on
+// PATH at all: with an EMPTY directory as the whole PATH (so no python3, no bash, no grep) the
+// guard still refuses the force-push AND still lets the ordinary push through. Both halves matter:
+// a deny alone could be a fail-closed stub, and the allow proves the verdict was actually computed.
+T('RED-PROOF B10: with an empty PATH (no python3, no bash) the guard still gives real verdicts both ways', () => {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-nopath-'));
   try {
-    for (const tool of ['grep', 'cat', 'dirname', 'basename', 'sed', 'tr', 'sh']) {
-      const where = spawnSync('which', [tool], { encoding: 'utf8' }).stdout.trim();
-      if (where) fs.symlinkSync(where, path.join(bin, tool));
-    }
-    const r = run(IRREVERSIBLE, bash('git push --force origin main'), { env: { PATH: bin } });
-    assert.equal(r.decision, 'deny', `a guard that cannot parse its input must refuse, got "${r.decision}"`);
-    assert.match(r.reason, /python3/);
+    const d = run(IRREVERSIBLE, bash('git push --force origin main'), { env: { PATH: bin } });
+    assert.equal(d.decision, 'deny', `a force-push must still be refused with nothing on PATH, got "${d.decision}"`);
+    assert.doesNotMatch(d.reason, /python3/, 'the refusal must be the real verdict, not a missing-interpreter stub');
+    const a = run(IRREVERSIBLE, bash('git push origin main'), { env: { PATH: bin } });
+    assert.equal(a.decision, 'allow', `an ordinary push must still pass with nothing on PATH, got "${a.decision}": ${a.reason.slice(0, 160)}`);
+    const w = run(OVERWRITE, write('/nonexistent/_handoffs/x.md'), { env: { PATH: bin } });
+    assert.equal(w.decision, 'allow', `the overwrite guard must still compute with nothing on PATH, got "${w.decision}"`);
   } finally {
     fs.rmSync(bin, { recursive: true, force: true });
+  }
+});
+// The fail-closed branch, without Python in it. Input the guard cannot read as a JSON object gives
+// no verdict, and no verdict is a deny: the guard must never let a payload it did not understand
+// through on the assumption it was harmless.
+T('RED-PROOF B10b: malformed input JSON is refused by both guards, and the refusal names no interpreter', () => {
+  for (const script of [IRREVERSIBLE, OVERWRITE]) {
+    for (const junk of ['{not json', '', '"a string"', '[1,2]']) {
+      const r = run(script, junk);
+      assert.equal(r.decision, 'deny', `${path.basename(script)} must refuse unreadable input ${JSON.stringify(junk)}, got "${r.decision}"`);
+      assert.doesNotMatch(r.reason, /python3|bash/, 'the fail-closed branch must not depend on an interpreter');
+    }
   }
 });
 
@@ -186,29 +218,46 @@ function withTranscript(records, fn) {
   try { return fn(file); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 const user = (text, extra = {}) => ({ type: 'user', message: { role: 'user', content: text }, ...extra });
+// The phrase this suite chooses. It was the guard's published default until 2026-09-14; now it is
+// only ever set here, through the variable, the way an operator sets their own.
 const PHRASE = 'flyingfish';
+const PHRASED = { env: { PANDORAS_UNLOCK_PHRASE: PHRASE } };
 
 T('unlock: the phrase as the whole message unlocks', () => withTranscript([user('hello'), user(PHRASE)], (t) =>
-  allow(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }))));
+  allow(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }), PHRASED)));
 T('unlock: the phrase on a line by itself unlocks', () => withTranscript([user(`go ahead\n${PHRASE}\nthanks`)], (t) =>
-  allow(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }))));
+  allow(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }), PHRASED)));
 T('RED-PROOF unlock: the phrase inside a sentence does NOT unlock', () => withTranscript([user(`we might ${PHRASE} later, not now`)], (t) =>
-  deny(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }))));
+  deny(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }), PHRASED)));
 T('RED-PROOF unlock: a harness-injected (isMeta) message carrying the phrase does NOT unlock', () => withTranscript([user(PHRASE, { isMeta: true })], (t) =>
-  deny(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }))));
+  deny(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }), PHRASED)));
 T('RED-PROOF unlock: an assistant message carrying the phrase does NOT unlock', () =>
   withTranscript([{ type: 'assistant', message: { role: 'assistant', content: PHRASE } }], (t) =>
-    deny(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }))));
+    deny(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }), PHRASED)));
 T('RED-PROOF unlock: an emphatic go-ahead that is not the phrase unlocks nothing', () => withTranscript([user('GO AHEAD'), user('yes, do it')], (t) =>
-  deny(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }))));
-T('unlock: $PANDORAS_UNLOCK_PHRASE replaces the default, whole-message rule included', () => withTranscript([user('yes really')], (t) => {
+  deny(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }), PHRASED)));
+T('unlock: $PANDORAS_UNLOCK_PHRASE is the phrase, whole-message rule included', () => withTranscript([user('yes really')], (t) => {
   allow(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }), { env: { PANDORAS_UNLOCK_PHRASE: 'yes really' } });
   deny(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }), { env: { PANDORAS_UNLOCK_PHRASE: 'something else' } });
 }));
 T('RED-PROOF unlock: the refusal reason names the phrase the operator must type', () => {
-  const r = deny(IRREVERSIBLE, bash('git push --force origin main'));
+  const r = deny(IRREVERSIBLE, bash('git push --force origin main'), PHRASED);
   assert.match(r.reason, /flyingfish/);
 });
+// NO DEFAULT. With the variable unset there is no phrase, so nothing in the transcript can unlock
+// the guard: not the old published default typed as a whole message, not anything else. The
+// refusal has to say so and name the variable, because the lane on the other end otherwise asks
+// the operator to type a word that cannot work. A blank value is the same as unset: an empty
+// phrase would match an empty message.
+T('RED-PROOF unlock: with PANDORAS_UNLOCK_PHRASE unset nothing unlocks, even the old default as a whole message', () =>
+  withTranscript([user('hello'), user(PHRASE)], (t) => {
+    const r = deny(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }));
+    assert.match(r.reason, /PANDORAS_UNLOCK_PHRASE/, 'the refusal must name the variable the operator has to set');
+    assert.doesNotMatch(r.reason, /flyingfish/, 'no default phrase may be named anywhere in a refusal');
+    deny(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }), { env: { PANDORAS_UNLOCK_PHRASE: '' } });
+    deny(IRREVERSIBLE, bash('git push --force origin main', { transcript_path: t }), { env: { PANDORAS_UNLOCK_PHRASE: '   ' } });
+    allow(IRREVERSIBLE, bash('git push origin main', { transcript_path: t })); // ordinary work is still ordinary with no phrase set
+  }));
 
 // ---------------------------------------------------------------- the report-overwrite guard
 function withBridge(fn) {

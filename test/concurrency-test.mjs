@@ -222,7 +222,10 @@ T('RED-PROOF crashed holder: a lock left by a SIGKILLed process is broken by the
       process.kill(process.pid, 'SIGKILL'); // no exit handler runs; the lock file stays behind
     `;
     const r = await inline(script, ws, [ws]);
-    assert.equal(r.signal, 'SIGKILL', `the child was meant to die by signal, got exit ${r.status} ${r.stderr}`);
+    // Windows has no signals to die by: process.kill(pid, 'SIGKILL') is TerminateProcess, which ends
+    // the child just as abruptly (no exit handler runs) and reports exit code 1 with no signal.
+    if (process.platform === 'win32') assert.ok(r.signal === null && r.status !== 0, `the child was meant to be terminated, got exit ${r.status} signal ${r.signal} ${r.stderr}`);
+    else assert.equal(r.signal, 'SIGKILL', `the child was meant to die by signal, got exit ${r.status} ${r.stderr}`);
     assert.ok(fs.existsSync(lockFileOf(ws)), 'the crashed child left its lock behind (the premise of this test)');
     const holder = JSON.parse(fs.readFileSync(lockFileOf(ws), 'utf8'));
     assert.equal(holder.pid, r.pid, 'the lock names the pid that took it');

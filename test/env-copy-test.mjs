@@ -45,6 +45,10 @@ function withCapturedLog(fn) {
   return lines;
 }
 
+// Windows has no POSIX permission bits: a chmod there can only toggle read-only, and stat reports
+// 0o666 for any writable file. So the mode 600 assertion holds on macOS and Linux, and on Windows the
+// same test asserts the content only.
+const POSIX_MODES = process.platform !== 'win32';
 function modeOf(p) {
   return fs.statSync(p).mode & 0o777;
 }
@@ -80,7 +84,7 @@ T('RED-PROOF copyEnvFile with an allowlist writes exactly those keys, in file or
     const worktreeEnvPath = path.join(checkoutDir, '.env.local');
     const written = fs.readFileSync(worktreeEnvPath, 'utf8');
     assert.equal(written, 'ALPHA_KEY=one\nBETA_KEY=two\n', 'exactly the two named keys, source order, no comment');
-    assert.equal(modeOf(worktreeEnvPath), 0o600);
+    if (POSIX_MODES) assert.equal(modeOf(worktreeEnvPath), 0o600);
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
     fs.rmSync(checkoutDir, { recursive: true, force: true });
@@ -96,7 +100,7 @@ T('a repo with no env row keeps today\'s behaviour: the whole file, comment incl
     assert.equal(r.copied, true);
     const worktreeEnvPath = path.join(checkoutDir, '.env.local');
     assert.equal(fs.readFileSync(worktreeEnvPath, 'utf8'), FIXTURE_ENV);
-    assert.equal(modeOf(worktreeEnvPath), 0o600);
+    if (POSIX_MODES) assert.equal(modeOf(worktreeEnvPath), 0o600);
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
     fs.rmSync(checkoutDir, { recursive: true, force: true });

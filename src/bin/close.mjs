@@ -57,7 +57,7 @@ import {
   closeReportRefusal, inScopeVerdict, scopeDiffPlan,
   liveShaVerdict, verifyFormLabel, laneCommitFor, freshBaseFromRevList,
 } from '../lib/close.mjs';
-import { buildPlan, runBuild } from '../lib/build.mjs';
+import { buildPlan, runBuild, resolveNpm } from '../lib/build.mjs';
 
 // THE WORKSPACE ROOT is the directory holding `_handoffs/` and your repos. It is NEVER the
 // package's own install location, so it comes from $PANDORAS_ROOT or the current directory.
@@ -129,8 +129,9 @@ function mergeNote(g, total, BASE) {
 // lib/close.mjs). A stale base grades no with the missing commits named and the build is not run: a
 // build of one half proves nothing about the union. An unmeasured base is a skip.
 //
-// THE RUN IS BOUNDED (lib/build.mjs): no shell, a time limit that kills the process group, and only
-// the last 64 KB of output kept. A timeout or a signal is no; npm missing from PATH is skip.
+// THE RUN IS BOUNDED (lib/build.mjs): no shell (npm runs as node on npm-cli.js, so Windows builds
+// too), a time limit that kills the process group on POSIX and the process tree on Windows, and only
+// the last 64 KB of output kept. A timeout or a signal is no; npm that cannot be resolved is skip.
 async function gateGreen({ checkoutDir, run, repoDir, gitRepo, rec, BASE }) {
   let pkg = null;
   try { pkg = JSON.parse(fs.readFileSync(path.join(checkoutDir, 'package.json'), 'utf8')); } catch { pkg = null; }
@@ -203,7 +204,13 @@ async function gateLive({ rp, rec, repoDir, gitRepo, checkoutDir, proofOverride 
     let declared = false;
     try { declared = Boolean(JSON.parse(fs.readFileSync(pkgPath, 'utf8'))?.scripts?.[verify.name]); } catch { declared = false; }
     if (!declared) return out(scriptProofVerdict({ name: verify.name, declared, code: null, checkout: checkoutDir }), ignoredProof);
-    const r = spawnSync('npm', ['run', verify.name], { cwd: checkoutDir, encoding: 'utf8', timeout: 15 * 60_000, maxBuffer: 16 * 1024 * 1024 });
+    // npm resolved the build gate's way (lib/build.mjs resolveNpm): node on npm-cli.js, no shell, so
+    // it also runs on Windows, where the bare name is npm.cmd and will not start without a shell.
+    const npm = resolveNpm({ env: process.env });
+    if (!npm.command) {
+      return out(scriptProofVerdict({ name: verify.name, declared, code: null, error: `npm not found without a shell; tried ${npm.tried.join('; ')}`, checkout: checkoutDir }), ignoredProof);
+    }
+    const r = spawnSync(npm.command, [...npm.args, 'run', verify.name], { cwd: checkoutDir, encoding: 'utf8', timeout: 15 * 60_000, maxBuffer: 16 * 1024 * 1024, shell: false, windowsHide: true });
     return out(scriptProofVerdict({
       name: verify.name,
       declared,

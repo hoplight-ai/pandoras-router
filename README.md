@@ -28,7 +28,7 @@ From the repo root:
 npm test
 ```
 
-600 assertions across 14 suite files, all passing. 235 of them are marked red-proof by their own
+619 assertions across 15 suite files, all passing. 247 of them are marked red-proof by their own
 suite: each asserts a refusal, or that a weakening turns the suite red, so deleting a guard turns
 them red rather than quietly widening what the tool allows. Each suite prints its own count as it
 runs: the allocator and scope suite reports 137 of its 318 as red-proof, the shell guards 34 of

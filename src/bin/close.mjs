@@ -49,8 +49,8 @@ import { SIDE_FILE_RE, sideFileAllowed, extractBriefTitle, noSideFilesVerdict } 
 import { findStatus } from '../lib/report-check.mjs';
 import {
   classifyPath, gradeMerge, gradeGates, isBranchless, briefMatchesLaneOrKey,
-  scopeCompliance, zeroCommitScopeVerdict, renameOnCloseVerdict,
-  classifyPartialKind, partialStatusLabel, doneReportRefusal, overrulesReportCheck,
+  renameOnCloseVerdict, classifyPartialKind, partialStatusLabel,
+  closeReportRefusal, inScopeVerdict, scopeDiffPlan,
 } from '../lib/close.mjs';
 
 // THE WORKSPACE ROOT is the directory holding `_handoffs/` and your repos. It is NEVER the
@@ -202,18 +202,32 @@ async function main() {
   //
   // The allocator proved two lanes' DECLARED scopes disjoint before letting them share a repo.
   // That proof is worth nothing if a lane can then edit outside its declaration.
+  // WHICH COMMITS (DRIVER1, 2026-09-14): the merge base while it is behind the branch tip; once the
+  // branch is merged that base is the tip itself and measures nothing, so the lane's own commits since
+  // the base recorded at OPEN are read instead. See scopeDiffPlan in lib/close.mjs, including why a
+  // plain diff from the recorded base would name a neighbour's files.
+  //
+  // WHICH GRADE: inScopeVerdict in lib/close.mjs, where a Touches: none lane that committed files
+  // grades no with the paths named rather than n/a.
   let inScope = { value: 'n/a', note: 'this lane declared no file scope, so it held the repo alone and there is nothing to breach.' };
   const declared = rec.scope ?? [];
   if (gitRepo && !isBranchless(rec.branch) && (declared.length || rec.declaredNone)) {
-    const touched = merged.base
-      ? (git(repoDir, ['diff', '--name-only', merged.base, rec.branch]) ?? '').split('\n').filter(Boolean)
-      : [];
-    if (!touched.length && rec.declaredNone !== undefined) {
-      const z = zeroCommitScopeVerdict({ declaredNone: Boolean(rec.declaredNone), scope: declared });
-      inScope = { value: z.value, note: z.note };
+    const plan = scopeDiffPlan({
+      recordedBase: rec.base ?? null,
+      mergeBase: merged.base,
+      branchTip: git(repoDir, ['rev-parse', rec.branch]),
+    });
+    const listed = plan.method === 'diff'
+      ? git(repoDir, ['diff', '--name-only', plan.from, rec.branch])
+      : plan.method === 'walk'
+        ? git(repoDir, ['log', '--no-merges', '--first-parent', '--format=', '--name-only', `${plan.from}..${rec.branch}`])
+        : '';
+    if (listed === null) {
+      inScope = { value: 'skip', note: `SKIP: git could not list what the branch touched (${plan.note}). Nothing was measured, and a skip is not a pass.` };
     } else {
-      const c = scopeCompliance(touched, declared);
-      inScope = { value: c.value, note: c.note };
+      const touched = [...new Set(listed.split('\n').filter(Boolean))];
+      const v = inScopeVerdict({ touched, scope: declared, declaredNone: rec.declaredNone });
+      inScope = { value: v.value, note: `${v.note} (${plan.note})` };
     }
   }
 
@@ -271,16 +285,15 @@ async function main() {
   });
 
   // ---- may the close proceed, given what the report itself says
-  let refusal = { ok: true, condition: null, why: null };
-  if (reportText && graded.status === 'DONE') {
-    refusal = doneReportRefusal({
-      file: reportName,
-      statusWord: statusWordOf(reportText),
-      evidencePresent: /^\s*[-*>\s#_]*evidence\s*:/im.test(reportText),
-      doneHonestWarn: false,
-      overruled: overrulesReportCheck(reportText),
-    });
-  }
+  //
+  // Asked whenever the lane's report is on the bridge, whatever the gates graded, the same as the
+  // private workspace close: a report with no STATUS word, a DONE with no Evidence line, or a DONE
+  // beside an unanswered honesty flag stops the close before anything is written, dry run included.
+  // No report yet is the normal order and refuses nothing. See closeReportRefusal in lib/close.mjs
+  // for the defect this replaces (DRIVER1, 2026-09-14): the call used to omit the flag saying a
+  // report was present, so none of the three could fire.
+  const refusal = closeReportRefusal({ file: reportName ?? '<report>', text: reportText });
+  if (refusal.note) console.log(`  ${refusal.note}`);
 
   // ---- print
   const rows = [

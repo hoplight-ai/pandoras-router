@@ -25,7 +25,7 @@
 // findStatus/STATUS_WORDS: the ONE parser that locates a report's STATUS word, shared with
 // the status-word sweep (via lib/verdict.mjs) so overrideReportStatusWord below can never rewrite a
 // line that parser does not itself read as the status. See overrideReportStatusWord's own comment.
-import { findStatus, STATUS_WORDS } from './report-check.mjs';
+import { findStatus, checkText, STATUS_WORDS } from './report-check.mjs';
 import { STRING_YES_CAVEAT } from './liveness.mjs';
 
 export const ABSENT = null;
@@ -523,6 +523,85 @@ export function zeroCommitScopeVerdict({ declaredNone, scope }) {
     breaches: [],
     note: `SKIP: this lane declared a file scope [${scope.join(', ')}] but the branch carries no commits ahead of its base to measure against it — a lane that promised files and wrote none is unmeasured, not clean. Nothing was decided, and a skip is not a pass.`,
   };
+}
+
+/**
+ * GATE 7 AS THE CLOSE DRIVER GRADES IT.
+ *
+ * THE DEFECT THIS CLOSES (DRIVER1, 2026-09-14, found by the gate-matrix lane). The ledger stores
+ * `Touches: none` as an empty scope, and scopeCompliance reads an empty scope as undeclared, so a
+ * lane that promised to write no file and then committed some graded `n/a`, a pass. That is the
+ * one declaration whose breach is the easiest to see, and the allocator had let that lane run beside
+ * every other lane in the repo on the strength of it.
+ *
+ *   declaredNone, nothing touched     yes (zeroCommitScopeVerdict, unchanged)
+ *   declaredNone, paths touched       no, every path named (ALWAYS_IN_SCOPE paths excepted, the same
+ *                                     allowance scopeCompliance gives a declared scope)
+ *   a real scope, nothing touched     skip (zeroCommitScopeVerdict, unchanged)
+ *   otherwise                         scopeCompliance, unchanged
+ *
+ * @param {{touched:string[], scope:string[], declaredNone?:boolean}} p
+ * @returns {{value:string, breaches:string[], note:string}}
+ */
+export function inScopeVerdict({ touched = [], scope = [], declaredNone }) {
+  if (declaredNone) {
+    const breaches = touched.filter((p) => !ALWAYS_IN_SCOPE.has(p));
+    if (!breaches.length) return zeroCommitScopeVerdict({ declaredNone: true, scope });
+    return {
+      value: 'no',
+      breaches,
+      note: `this lane declared Touches: none and the branch touched ${breaches.length} path(s): ${breaches.slice(0, 8).join(', ')}${breaches.length > 8 ? ` (+${breaches.length - 8} more)` : ''}. The allocator let it run beside every other lane in the repo on the strength of that declaration; check those files against other open lanes before merging anything further.`,
+    };
+  }
+  if (!touched.length && declaredNone !== undefined) return zeroCommitScopeVerdict({ declaredNone: false, scope });
+  return scopeCompliance(touched, scope);
+}
+
+/**
+ * WHICH COMMITS GATE 7 MEASURES.
+ *
+ * THE DEFECT THIS CLOSES (DRIVER1, 2026-09-14, found by the gate-matrix lane). The driver diffed from
+ * merge-base(origin/main, branch). Once the branch is merged, that merge base IS the branch tip, the
+ * diff is empty, and a lane with a real declared scope graded `skip`: a landed lane could not close
+ * DONE on in-scope at all, and a lane that breached its scope and then landed was never measured.
+ *
+ * THE RULE.
+ *   the merge base is behind the tip   diff from the merge base, unchanged. This is the lane's own
+ *                                      net change, and after a fresh-base merge (`git merge
+ *                                      origin/main` in the lane) it still excludes what neighbours
+ *                                      landed on main in the meantime.
+ *   merged, or no merge base, and a    WALK from the base recorded at OPEN: the paths the lane's own
+ *   base was recorded at OPEN          commits changed, `log --no-merges --first-parent
+ *                                      <recorded>..<branch>`. The branch is never moved by a landing
+ *                                      (src/bin/lane-land.mjs), so its first-parent line is the lane's.
+ *   merged, nothing recorded           diff from the merge base, which is empty, and the note says so;
+ *                                      the zero-commit reading then grades it skip, not a pass.
+ *   neither                            nothing to measure.
+ *
+ * WHY NOT A PLAIN DIFF FROM THE RECORDED BASE, which is what the finding proposed. A lane that brought
+ * main in before landing (the fresh-base rule requires exactly that) carries every file a neighbour
+ * landed since OPEN in `diff <recorded>..<branch>`, and gate 7 would name those files as this lane's
+ * breaches. That trades a false skip for a false refusal. The first-parent walk reads only the lane's
+ * own commits. Its cost: an edit made only inside a merge commit's conflict resolution is not
+ * counted on a merged branch. The same walk is what the private workspace close measures gate 7 with.
+ *
+ * @param {{recordedBase?:string|null, mergeBase?:string|null, branchTip?:string|null}} p
+ * @returns {{method:'diff'|'walk'|'none', from:string|null, note:string}}
+ */
+export function scopeDiffPlan({ recordedBase = null, mergeBase = null, branchTip = null }) {
+  const collapsed = Boolean(mergeBase) && Boolean(branchTip) && mergeBase === branchTip;
+  if (mergeBase && !collapsed) return { method: 'diff', from: mergeBase, note: `diffed from the merge base ${String(mergeBase).slice(0, 8)}` };
+  if (recordedBase) {
+    return {
+      method: 'walk',
+      from: recordedBase,
+      note: collapsed
+        ? `the branch is already merged (its merge base is its own tip), so the lane's own commits since the base recorded at OPEN ${String(recordedBase).slice(0, 8)} were measured instead`
+        : `no merge base could be computed, so the lane's own commits since the base recorded at OPEN ${String(recordedBase).slice(0, 8)} were measured instead`,
+    };
+  }
+  if (mergeBase) return { method: 'diff', from: mergeBase, note: 'the branch is already merged and no base was recorded at OPEN, so the diff from the merge base is empty and nothing the lane touched could be measured' };
+  return { method: 'none', from: null, note: 'no merge base and no base recorded at OPEN, so nothing the lane touched could be measured' };
 }
 
 /**
@@ -1055,6 +1134,47 @@ export function doneReportRefusal({
   }
 
   return { ok: true, condition: null, why: null };
+}
+
+/**
+ * THE CLOSE DRIVER'S REPORT REFUSAL: report-check's reading of the report, handed to
+ * doneReportRefusal with the report's presence stated.
+ *
+ * THE DEFECT THIS REPLACES (DRIVER1, 2026-09-14, found by the gate-matrix lane). src/bin/close.mjs
+ * called doneReportRefusal directly, passing the status word, a hand-written Evidence regex and
+ * `doneHonestWarn: false`, but never `present` or `statusFound`. doneReportRefusal returns ok at once
+ * unless told a report is present, so none of the three refusals could fire on a real close, and the
+ * honesty flag could not have fired even if presence had been passed.
+ *
+ * THE SHAPE is the private workspace close's reportRefusalFor, so the two cannot disagree: presence
+ * is true whenever report text was read; the status, Evidence and done-honest answers are
+ * report-check's own checks (checkText), never a second parser; the overrule is overrulesReportCheck.
+ * A file report-check reads as a consumed brief rather than a lane report is never refused, and says
+ * so in a note, because a check that cannot apply must not pass silently either.
+ *
+ * Pure apart from report-check's date fallback, which stats `file` only when its name carries no
+ * date.
+ *
+ * @param {{file:string, text:string|null}} p
+ * @returns {{ok:boolean, condition:string|null, why:string|null, note?:string}}
+ */
+export function closeReportRefusal({ file, text }) {
+  if (text === null || text === undefined) return doneReportRefusal({ file, present: false });
+  const checked = checkText(text, file);
+  if (checked.kind !== 'report')
+    return { ok: true, condition: null, why: null, note: `NOTE: report-check reads ${file} as a ${checked.kind}, not a lane report, so the report rules were not applied to it.` };
+  const by = Object.fromEntries(checked.checks.map((c) => [c.name, c]));
+  return doneReportRefusal({
+    file,
+    present: true,
+    statusFound: by.status?.status === 'PASS',
+    statusWord: checked.statusWord,
+    evidencePresent: by.evidence?.status === 'PASS',
+    doneHonestWarn: by['done-honest']?.status === 'WARN',
+    doneHonestSummary: by['done-honest']?.summary ?? '',
+    doneHonestDetail: by['done-honest']?.detail ?? [],
+    overruled: overrulesReportCheck(text),
+  });
 }
 
 /**

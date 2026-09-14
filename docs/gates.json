@@ -84,12 +84,14 @@
       "tested_in": ["test/router-test.mjs"],
       "source": [
         { "file": "src/bin/close.mjs", "between": ["// ---- in-scope", "// ---- renamed"] },
+        { "file": "src/lib/close.mjs", "function": "inScopeVerdict" },
         { "file": "src/lib/close.mjs", "function": "scopeCompliance" },
-        { "file": "src/lib/close.mjs", "function": "zeroCommitScopeVerdict" }
+        { "file": "src/lib/close.mjs", "function": "zeroCommitScopeVerdict" },
+        { "file": "src/lib/close.mjs", "function": "scopeDiffPlan" }
       ],
-      "what_it_proves": "Every path in the branch's diff against its merge base sits inside the file scope the lane declared when it opened, or on the ALWAYS_IN_SCOPE allowlist, which ships empty.",
-      "what_it_does_not_prove": "That a change inside the scope cannot break a file outside it through an API shape, a schema, a generated file or a shared constant; the gate measures paths, not effects, and in this driver a lane that declared Touches: none and then committed files still reads n/a. See docs/DESIGN-NOTES.md, entry b.",
-      "note": "n/a means the lane declared no scope and therefore held the repo alone. skip means a real scope was declared and the diff to measure is empty. This driver takes the diff from the merge gate's base (the merge base of origin/main and the branch), not from the base recorded at OPEN. Two readings follow from the source and are recorded here because a reviewer will find them. First, a branch already fully merged into main has a merge base equal to its own tip, so its diff is empty and a lane with a real declared scope reads skip, not yes. Second, a Touches: none lane is stored with an empty scope, and scopeCompliance reads an empty scope as undeclared, so a none lane that did commit files reads n/a (test/router-test.mjs asserts that empty-scope reading); only a none lane with an empty diff reaches the yes in zeroCommitScopeVerdict. When the merge base could not be computed the touched list is also empty and the zero-commit reading applies."
+      "what_it_proves": "Every path the lane's branch touched sits inside the file scope the lane declared when it opened, or on the ALWAYS_IN_SCOPE allowlist, which ships empty; a lane that declared Touches: none touched no path at all. Before the branch is merged the touched paths are its diff against the merge base; once merged they are the paths its own first-parent commits changed since the base recorded at OPEN.",
+      "what_it_does_not_prove": "That a change inside the scope cannot break a file outside it through an API shape, a schema, a generated file or a shared constant; the gate measures paths, not effects. On a merged branch, an edit made only inside a merge commit's conflict resolution is not counted, because the walk reads non-merge commits. See docs/DESIGN-NOTES.md, entry b.",
+      "note": "n/a means the lane declared no scope and therefore held the repo alone. skip means a real scope was declared and nothing was measured against it: the lane committed nothing, git could not list the touched paths, or the branch is merged and no base was recorded at OPEN. no names every path outside the declaration; for a Touches: none lane that is every path it touched (inScopeVerdict). Which commits are read is scopeDiffPlan: the merge-base diff while the merge base is behind the branch tip, and the first-parent walk from the recorded base once the branch is merged or no merge base can be computed. A plain diff from the recorded base was rejected because a lane that brought main in before landing would carry every neighbour's landed file in it and be refused for them. Both readings changed on 2026-09-14; before that a merged branch graded skip and a Touches: none lane that committed files graded n/a. The git reads around these functions are not exported; the decisions are tested in test/router-test.mjs."
     },
     {
       "name": "findings",
@@ -208,10 +210,13 @@
     }
   ],
   "close_refusals": {
-    "$comment": "Not gates. As designed, a failing gate makes the close PARTIAL and the close still happens, while these three abort it with a non-zero exit and write nothing, on a dry run as well. Decided by doneReportRefusal in src/lib/close.mjs; src/bin/close.mjs asks only when the gates graded DONE and a report is on disk.",
+    "$comment": "Not gates. A failing gate makes the close PARTIAL and the close still happens, while these three abort it with a non-zero exit and write nothing, on a dry run as well. Decided by doneReportRefusal in src/lib/close.mjs and reached through closeReportRefusal, which src/bin/close.mjs calls whenever the lane's report is on disk, whatever the gates graded.",
     "names": ["no-status-word", "done-without-evidence", "done-honest-unaddressed"],
-    "source": [{ "file": "src/lib/close.mjs", "function": "doneReportRefusal" }],
-    "note": "None of the three can fire in this driver as it stands. doneReportRefusal returns ok at once unless it is handed present: true, and the call in src/bin/close.mjs passes file, statusWord, evidencePresent, doneHonestWarn and overruled but neither present nor statusFound. It also passes doneHonestWarn as false. The report's own STATUS word still lowers a grade through gradeGates, which the driver does feed. The matrix test asserts the call still omits present, so the day the driver is fixed the suite turns red and this note gets rewritten."
+    "source": [
+      { "file": "src/lib/close.mjs", "function": "doneReportRefusal" },
+      { "file": "src/lib/close.mjs", "function": "closeReportRefusal" }
+    ],
+    "note": "All three can fire in this driver. closeReportRefusal reads the report through report-check's own checks (checkText in src/lib/report-check.mjs) and hands doneReportRefusal present: true, statusFound, the STATUS word, the Evidence answer, the done-honest WARN with its flagged lines, and whether an overruled: line names report-check. That is the shape of the private workspace close's call. A report report-check reads as a consumed brief is never refused and the close prints a note saying so; no report on disk yet refuses nothing. Until 2026-09-14 the driver called doneReportRefusal without present and with doneHonestWarn fixed at false, so none of the three could fire; test/router-test.mjs now drives each refusal through closeReportRefusal with real report text, and the matrix test turns red if the driver stops passing presence."
   },
   "ledger": {
     "$comment": "The CLOSE record as recordClose writes it. The RECORD FORMS comment at the top of src/lib/lanes.mjs lists the columns through roadmap and omits kind; the HEADER that file writes into a fresh LANES.md stops at owner-way. recordClose is the authority, and the matrix test reads the comment line and then checks recordClose for the appended field.",

@@ -1,3 +1,4 @@
+// @ts-check
 // open.mjs — the lane-open decisions that involve no git and no writes, so they can be tested.
 //
 // WHY THIS FILE EXISTS. `lane-alloc` offers cards for the workspace root, and `lane-open` refused

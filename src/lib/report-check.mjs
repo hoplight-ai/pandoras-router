@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // report-check.mjs — mechanize the report rules in the project rules file §"your closing summary
 // block is a claim, not a receipt" and the standing orders.
 //

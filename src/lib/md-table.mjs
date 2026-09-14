@@ -1,3 +1,4 @@
+// @ts-check
 // md-table.mjs — read a markdown table that is tagged with an HTML comment marker.
 //
 // WHY A MARKER AND NOT "the first table after the heading". Headings get reworded. A policy file

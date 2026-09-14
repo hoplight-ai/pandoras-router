@@ -1,3 +1,4 @@
+// @ts-check
 // briefs.mjs — read a brief's routing facts out of its own text.
 //
 // One parser, so the board and the allocator cannot disagree about what a brief targets. Two

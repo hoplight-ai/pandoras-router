@@ -1,3 +1,4 @@
+// @ts-check
 // side-files-gate.mjs — gate `no-side-files`. The problem it answers, in one sentence: a project
 // already has a tracker, so why is every lane proliferating more surfaces for it to go stale in.
 //

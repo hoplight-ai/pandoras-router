@@ -1,3 +1,4 @@
+// @ts-check
 // lanes.mjs — the lane ledger at _handoffs/_lanes/LANES.md.
 //
 // APPEND-ONLY, and that is not a style preference. The workspace root folder is not a git

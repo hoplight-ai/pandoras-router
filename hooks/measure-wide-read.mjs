@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // measure-wide-read.mjs — the measurement behind guard-wide-read.mjs, as a script anyone can run.
 //
 //   node hooks/measure-wide-read.mjs [transcripts-dir] [--days <n>] [--since <YYYY-MM-DD>]

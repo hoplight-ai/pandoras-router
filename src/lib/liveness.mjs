@@ -1,3 +1,4 @@
+// @ts-check
 // liveness.mjs — did the merged change actually reach the deployed surface?
 //
 // THIS IS THE GATE NOTHING ELSE RUNS. Every other check in a close asks a question about the

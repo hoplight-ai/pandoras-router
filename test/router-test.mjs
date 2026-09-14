@@ -967,6 +967,7 @@ T('RED-PROOF live-ancestry: a served build that neither matches nor contains thi
 // psi1 hit the same wall on a page change two days earlier. The fallback direction is the
 // safety property and three of the assertions below exist to hold it in place.
 
+/** @type {Array<{path:string, surface:'self'|'none'}>} the only two values POLICY.md's parser accepts */
 const SURF = [{ path: '.', surface: 'self' }, { path: 'ops', surface: 'none' }];
 
 T('surfaces: a change under a `self` prefix is probed at its own url, not at the repo root', () => {

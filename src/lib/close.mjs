@@ -1,3 +1,4 @@
+// @ts-check
 // close.mjs — the five gate decisions, with no git and no network in them, so they can be tested.
 //
 // GATE 1 IS CONTENT-VERIFIED, NOT ANCESTRY-VERIFIED, and that distinction is the whole reason this
@@ -738,6 +739,13 @@ export function landingGapVerdict({ ahead, land = null, isInBranch }) {
  * since 2026-09-04 one excuse: a gap made only of this branch's own landing (`gap`, from
  * landingGapVerdict) counts as containing the head, because the landing merge carries nothing the
  * branch did not already build. Grandfathered lanes get the observation as prose, not as a failure.
+ *
+ * @param {object} o
+ * @param {boolean} o.containsMainHead   origin/main's head is an ancestor of the branch tip
+ * @param {boolean} o.grandfathered      the lane predates the rule
+ * @param {number|string|null} [o.behindBy]  commits on origin/main the branch lacks; absent when not measured
+ * @param {{contained:boolean, why:string, unexplained:Array<string>}|null} [o.gap]  from landingGapVerdict
+ * @returns {{fresh:boolean, why:string}}
  */
 export function freshBaseVerdict({ containsMainHead, grandfathered, behindBy, gap = null }) {
   if (containsMainHead) return { fresh: true, why: 'the branch contains origin/main\'s head, so this build is a build of the combined result' };
@@ -1371,7 +1379,17 @@ export function verifyProdVerdict({ code, tail = '' }) {
   };
 }
 
-/** The deployment status route as a fallback probe. Ancestry, exactly as the `sha:` form of gate 3 grades it. */
+/**
+ * The deployment status route as a fallback probe. Ancestry, exactly as the `sha:` form of gate 3 grades it.
+ *
+ * @param {object} o
+ * @param {number|null} o.status        the route's HTTP status, or null when nothing answered
+ * @param {string|null} [o.served]      the release field it answered with; absent when it answered none
+ * @param {string} o.sha                the branch head
+ * @param {boolean} [o.isAncestor]
+ * @param {boolean|null} [o.servedKnown]
+ * @returns {{value:string, why:string}}
+ */
 export function obsProbeVerdict({ status, served, sha, isAncestor = false, servedKnown = null }) {
   if (status !== 200 || !served)
     return {

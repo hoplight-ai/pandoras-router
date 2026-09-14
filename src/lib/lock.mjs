@@ -1,3 +1,4 @@
+// @ts-check
 // lock.mjs — one exclusive lock on the router's state directory, `_handoffs/_lanes/`.
 //
 // THE DEFECT, 2026-09-14, found by three independent reviewers reading the public repo. Every write

@@ -1,3 +1,4 @@
+// @ts-check
 // alloc.mjs — the allocation decision, with no filesystem and no git in it.
 //
 // Everything that decides which lanes may fire together lives here so it can be unit-tested against

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // ── WHAT THIS IS ──────────────────────────────────────────────────────────────────────────────
 // WHAT IT CHECKS: a whole-file Write aimed at a report that already exists on the handoff bridge,
 //                 and refuses it so a second agent cannot erase the first one's report.

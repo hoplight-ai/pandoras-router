@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // close.mjs — the close. An agent says it finished; this finds out.
 //
 // THE WHOLE IDEA. A worker's word for its own completion is the least reliable signal in the

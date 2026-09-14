@@ -1,3 +1,4 @@
+// @ts-check
 // scope.mjs — do two lanes touch the same files?
 //
 // THIS IS THE ENTIRE SAFETY ARGUMENT FOR TWO CONCURRENT WRITERS IN ONE REPO. If it is a heuristic,

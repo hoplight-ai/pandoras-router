@@ -1,3 +1,4 @@
+// @ts-check
 // finding-lines.mjs — a `FINDING:` line in a done-file either carries a fix, or the close refuses
 // it. The norm nobody enforces, restated as a gate: every problem you raise needs a solution.
 //

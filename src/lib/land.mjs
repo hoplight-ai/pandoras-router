@@ -1,3 +1,4 @@
+// @ts-check
 // land.mjs — the pure half of `router land <lane>`: the merge message and the refusals. No git, no
 // filesystem, so both are unit-tested.
 //

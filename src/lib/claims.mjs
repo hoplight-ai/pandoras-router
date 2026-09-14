@@ -1,3 +1,4 @@
+// @ts-check
 // claims.mjs — one parser for _handoffs/_lanes/CLAIMS.md, shared by the board, the allocator,
 // lane-open and lane-close. There was one parser inside fire-board.mjs; four copies of it would
 // have drifted within a week and the board would have disagreed with the allocator about who holds

@@ -28,6 +28,9 @@ From the repo root:
 npm test
 ```
 
+CI runs this same command on every push and pull request, on Node 22 and 24, on Ubuntu and macOS
+(four matrix cells, `.github/workflows/ci.yml`).
+
 619 assertions across 15 suite files, all passing. 247 of them are marked red-proof by their own
 suite: each asserts a refusal, or that a weakening turns the suite red, so deleting a guard turns
 them red rather than quietly widening what the tool allows. Each suite prints its own count as it

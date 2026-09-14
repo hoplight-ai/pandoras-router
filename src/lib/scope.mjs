@@ -55,6 +55,8 @@ export function setWorkspacePrefixes(list) {
 const fold = (p, ci) => (ci ? String(p).toLowerCase() : String(p));
 
 /**
+ * @param {string} raw     one declared path, as a brief or ledger spells it
+ * @param {string|null} [repo]  the repo the path belongs to; a leading repo name is stripped
  * @param {{caseInsensitive?:boolean}} [opts]  defaults to the running disk's behaviour. It decides
  *   whether `Web/x` in repo `web` is the repo (case-insensitive disk) or a folder named `Web`.
  */
@@ -115,6 +117,8 @@ function contains(dir, file, ci = CASE_INSENSITIVE_DISK) {
 }
 
 /**
+ * @param {string} a  one normalized path
+ * @param {string} b  another normalized path
  * @param {{caseInsensitive?:boolean}} [opts]  defaults to the running disk's behaviour
  */
 export function pathsIntersect(a, b, { caseInsensitive = CASE_INSENSITIVE_DISK } = {}) {
@@ -126,6 +130,7 @@ export function pathsIntersect(a, b, { caseInsensitive = CASE_INSENSITIVE_DISK }
  * @returns {{intersects:boolean, pairs:Array<[string,string]>}}  pairs are reported as declared
  */
 export function scopesIntersect(scopeA, scopeB, opts = {}) {
+  /** @type {Array<[string,string]>} */
   const pairs = [];
   for (const a of scopeA) for (const b of scopeB) if (pathsIntersect(a, b, opts)) pairs.push([a, b]);
   return { intersects: pairs.length > 0, pairs };
@@ -174,6 +179,7 @@ export function scopesIntersect(scopeA, scopeB, opts = {}) {
  */
 export function applyExclusive(scope, exclusive) {
   const all = withBuiltinExclusive(exclusive);
+  /** @type {Array<[string,string]>} */
   const hits = [];
   for (const p of scope) for (const e of all) if (contains(e, p)) hits.push([p, e]);
   if (!hits.length) return { scope, widened: false, hits: [] };

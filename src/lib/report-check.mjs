@@ -118,6 +118,7 @@ function findStatus(lines) {
       if (m) return { word: m[1], line: i, source: 'fenced report block', region: fenced };
     }
   }
+  /** @type {Array<[RegExp, string]>} pattern that declares a status, and the name of that form */
   const declarers = [
     [/STATUS\s*(\*\*)?\s*[:=]/i, 'STATUS: line'],
     [/\bREPORT\b/, 'REPORT header line'],

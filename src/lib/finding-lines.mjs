@@ -176,6 +176,10 @@ export function setFindingQuadrant(q) {
  *
  * @param {object} f                  one complete parsed FINDING line
  * @param {object} o
+ * @param {string} o.lane             the lane the finding came from; part of the minted id
+ * @param {number} o.n                1-based counter within the report
+ * @param {string} o.today            YYYY-MM-DD, written as first_seen and last_seen
+ * @param {string|null} [o.repo]      the repo, when the caller knows it
  * @param {Record<string,string>} [o.aliases]  owner -> routing value, injected by the caller
  */
 export function findingRow(f, { lane, n, today, repo = null, aliases = {} }) {

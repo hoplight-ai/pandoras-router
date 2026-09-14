@@ -136,6 +136,23 @@ T('cookie and custom-header auth send the value on the named header', () => {
   assert.equal(h['x-deploy-token'], 'tok');
 });
 
+T('every auth kind that sends a credential returns the whole documented shape, refused included', () => {
+  // The type checker caught the basic branch returning no `refused` key at all while the JSDoc and
+  // every other branch return `refused: null`. A caller that tests `refused === null` read basic
+  // auth as refused.
+  const sent = [
+    livenessHeaders({ kind: 'basic', envVar: 'PANDORAS_A' }, { PANDORAS_A: 'user:pw' }),
+    livenessHeaders({ kind: 'basic', envVar: 'PANDORAS_A' }, { PANDORAS_A: 'Basic dXNlcjpwdw==' }),
+    livenessHeaders({ kind: 'cookie', envVar: 'PANDORAS_C' }, { PANDORAS_C: 'session=abc' }),
+    livenessHeaders({ kind: 'header', header: 'X-Deploy-Token', envVar: 'PANDORAS_T' }, { PANDORAS_T: 'tok' }),
+  ];
+  for (const r of sent) {
+    assert.deepEqual(Object.keys(r).sort(), ['headers', 'missing', 'refused']);
+    assert.equal(r.missing, null);
+    assert.equal(r.refused, null);
+  }
+});
+
 T('RED-PROOF a credential VALUE never appears in any verdict string', async () => {
   const cfg = { ...CONFIG, auth: { kind: 'cookie', envVar: 'PANDORAS_C' } };
   const v = await run({ config: cfg, fetchImpl: fakeFetch({ status: 403 }), env: { PANDORAS_C: 'session=SUPERSECRET' } });

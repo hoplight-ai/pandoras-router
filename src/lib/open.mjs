@@ -51,9 +51,14 @@ export const RECENT_TOUCH_MINUTES = 10;
  * The refusal itself was correct and is unchanged; only the diagnosis and the remedy were wrong, so
  * nothing here is softened and no override flag was added.
  *
- * @param {number} ageH            how old the blocking claim is
- * @param {number|null} worktreeDirty   dirty file count in the holder's worktree; null = unmeasured
- * @param {number|null} newestTouchMin  minutes since the newest write under it; null = unmeasured
+ * @param {object} o
+ * @param {string} o.blockingChat      the chat name on the blocking claim
+ * @param {string|null} o.blockingSession  the session id on the blocking claim, when it carries one
+ * @param {string} o.myChat            this card's chat name
+ * @param {string} o.mySession         this card's session id
+ * @param {number} o.ageH              how old the blocking claim is
+ * @param {number|null} [o.worktreeDirty]   dirty file count in the holder's worktree; null or absent = unmeasured
+ * @param {number|null} [o.newestTouchMin]  minutes since the newest write under it; null or absent = unmeasured
  */
 export function openRefusal({ blockingChat, blockingSession, myChat, mySession, ageH, worktreeDirty, newestTouchMin }) {
   // `mine` NO LONGER MEANS "this is the same lane" AND MUST NOT BE READ THAT WAY. It means an active

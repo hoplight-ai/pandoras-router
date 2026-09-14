@@ -463,6 +463,10 @@ T(`RED-PROOF runBuild: a 1 s limit on a build that never exits is no, ${WIN ? 'n
     assert.match(r.why, /1000 ms limit/);
     assert.ok(r.durationMs >= 1000, `graded after ${r.durationMs} ms, before the limit`);
     assert.ok(r.durationMs < 1000 + 500 + 1000 + 1500, `graded after ${r.durationMs} ms`);
+    // The tree first: this process outlives the build, so only the kill itself can have ended the
+    // grandchild. (In the driver case above the close exits, and on Windows libuv's job object ends
+    // every child of an exiting Node, so there the close's own exit would hide a leader-only kill.)
+    await assertTreeGone(w);
     if (WIN) {
       // TerminateProcess leaves an exit code, never a signal name.
       assert.match(r.why, /process tree was killed \(taskkill \/T \/F\)/);
@@ -471,7 +475,6 @@ T(`RED-PROOF runBuild: a 1 s limit on a build that never exits is no, ${WIN ? 'n
       assert.ok(r.signal === 'SIGTERM' || r.signal === 'SIGKILL', `signal was ${r.signal}`);
     }
     assert.match(r.tail, /FAKE-BUILD-HANGING/);
-    await assertTreeGone(w);
   });
 });
 

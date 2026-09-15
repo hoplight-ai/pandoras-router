@@ -282,9 +282,16 @@ The install is the only step that touches the network. If you would rather not r
 test/run.mjs` runs the whole assertion suite on its own with nothing installed; only the type
 check needs the compiler.
 
-The package declares a `pandoras-router` binary pointing at `src/bin/router.mjs`, so an install or
-a link puts that name on your path. Running `node src/bin/router.mjs <subcommand>` from the repo
-is equivalent and needs no install at all.
+**Nothing is published to npm.** `npm install pandoras-router` fetches nothing today: no release
+has been tagged and no package has been pushed to the registry, so the name in `package.json` is a
+placeholder for a release that has not been cut. The repository above is the only place this
+installs from.
+
+So run it out of the clone. `node src/bin/router.mjs <subcommand>` works with nothing installed at
+all, and is how every example in this README is run. The package does declare a `pandoras-router`
+binary pointing at that file, so `npm link` inside the clone, or an install straight from the git
+URL, puts that name on your path — both take the code from this repository, not from the registry.
+When a release is cut, this section will say so and name the version.
 
 Every driver resolves the workspace root, the directory holding `_handoffs/` and your repos, from
 `$PANDORAS_ROOT`, falling back to the current directory. The package's own install location is

@@ -7,8 +7,9 @@
 // line that is already written, so a crashed session can lose at most the record it was writing.
 //
 // RECORD FORMS
-//   OPEN  | lane | repo | branch | worktree | port | report | scope | session | ISO | base
-//   CLOSE | lane | status | merged | green | live | renamed | report-free | ISO | reason | owner-way | in-scope | roadmap
+//   OPEN   | lane | repo | branch | worktree | port | report | scope | session | ISO | base
+//   CLOSE  | lane | status | merged | green | live | renamed | report-free | ISO | reason | owner-way | in-scope | roadmap
+//   REVERT | lane | repo | merge | revert-commit | who | ISO   (Router REVERT1, 2026-09-15)
 //
 // `base` (added 2026-08-20) is the sha origin/main stood on when the lane opened, and it sits LAST
 // for the same reason `owner-way` does: every line written before it parses unchanged and reads as
@@ -50,8 +51,9 @@ const HEADER = `# LANES — append-only ledger of every lane this router opened 
 # NEVER edit a line that is already here: this folder is not a git repository, so a rewrite is
 # unrecoverable. Corrections are appended as a new record, not made in place.
 #
-#   OPEN  | lane | repo | branch | worktree | port | report | scope | session | ISO | base
-#   CLOSE | lane | status | merged | green | live | renamed | report-free | ISO | reason | owner-way
+#   OPEN   | lane | repo | branch | worktree | port | report | scope | session | ISO | base
+#   CLOSE  | lane | status | merged | green | live | renamed | report-free | ISO | reason | owner-way
+#   REVERT | lane | repo | merge | revert-commit | who | ISO — written by pandoras-router revert
 #
 # merged/green/live/renamed/report-free/owner-way are yes | no | skip | n/a | exempt.
 # A skip is NOT a pass. n/a and exempt are: n/a means there was never anything to measure,
@@ -134,6 +136,20 @@ export function recordKind(root, lane, kind, note = '') {
   return append(root, ['KIND', lane, kind, note.replace(/\|/g, '/'), new Date().toISOString()]);
 }
 
+/**
+ * REVERT | lane | repo | merge | revert-commit | who | ISO   (Router REVERT1, 2026-09-15,
+ * src/bin/revert.mjs). Written after `git revert -m 1 <merge>` succeeds on a lane's LAND merge.
+ *
+ * THE LAND ROW FOR THIS LANE IS NEVER TOUCHED. This file is append-only, same convention as
+ * everywhere else here: its tip stays the record of what the lane wrote, because reverting the
+ * merge does not make that untrue. This row only says the merge was undone, when, and by whom, and
+ * `parseLanes` folds it onto the lane's record so a lane that has been undone says so wherever
+ * lanes are read.
+ */
+export function recordRevert(root, r) {
+  return append(root, ['REVERT', r.lane, r.repo, r.merge, r.revertCommit, r.who ?? '-', new Date().toISOString()]);
+}
+
 export function recordClose(root, r) {
   // `in-scope` (gate 7, 2026-08-22) and then `roadmap` (gate 8, 2026-08-30) sit LAST, same
   // convention as `owner-way` and `base`: every line written before each of them parses unchanged
@@ -177,6 +193,12 @@ export function parseLanes(text) {
         // `land` is filled by a LAND record (2026-09-03) and is null until one is written. null is
         // the honest reading: no landing was recorded, which is not the same as "not landed".
         land: null,
+        // `landCount` (Router REVERT1, 2026-09-15) counts how many LAND records this lane has, so
+        // `planRevert` can refuse "which one" rather than silently reversing the wrong merge.
+        landCount: 0,
+        // `revert` (Router REVERT1, 2026-09-15) is filled by a REVERT record and is null until one
+        // is written — the same honest-null convention as `land`.
+        revert: null,
       });
     } else if (p[0] === 'CLOSE' && p.length >= 9) {
       const rec = byLane.get(p[1]) ?? { lane: p[1], repo: '?', branch: '?', worktree: '?', port: '-', report: '?', scope: ['.'], session: '?', opened: '?' };
@@ -199,9 +221,20 @@ export function parseLanes(text) {
       // The permanent identity of a landing: the branch tip at the moment it was merged, and the ONE
       // merge commit that landed it. Gate 7 walks from `tip`; a revert is `git revert -m 1 <merge>`.
       // A LAND row for a lane with no OPEN row still parses, so a hand-merged lane can be recorded.
-      const rec = byLane.get(p[1]) ?? { lane: p[1], repo: p[2], branch: p[3], worktree: '?', port: '-', report: p[7] !== '-' ? p[7] : '?', scope: ['.'], session: '?', opened: '?', status: 'OPEN', merged: '-', green: '-', live: '-', renamed: '-', reportFree: '-', ownerWay: '-', closed: null, reason: '', land: null };
+      const rec = byLane.get(p[1]) ?? { lane: p[1], repo: p[2], branch: p[3], worktree: '?', port: '-', report: p[7] !== '-' ? p[7] : '?', scope: ['.'], session: '?', opened: '?', status: 'OPEN', merged: '-', green: '-', live: '-', renamed: '-', reportFree: '-', ownerWay: '-', closed: null, reason: '', land: null, landCount: 0, revert: null };
       rec.land = { tip: p[4], merge: p[5], brief: p[6] !== '-' ? p[6] : null, report: p[7] !== '-' ? p[7] : null, at: p[8] };
+      // `landCount` (Router REVERT1, 2026-09-15): every LAND line for this lane increments it, so a
+      // lane landed twice is visible to `planRevert` as "more than one", never silently overwritten
+      // by the later line the way `rec.land` itself is.
+      rec.landCount = (rec.landCount ?? 0) + 1;
       byLane.set(p[1], rec);
+    } else if (p[0] === 'REVERT' && p.length >= 7) {
+      // REVERT | lane | repo | merge | revert-commit | who | ISO   (Router REVERT1, 2026-09-15,
+      // src/bin/revert.mjs). Folds onto the lane's record the same way KIND folds onto CLOSE: a
+      // lane with no record yet is left alone rather than manufactured, because a REVERT row can
+      // only ever follow a LAND row for the same lane in a ledger nothing rewrites.
+      const rec = byLane.get(p[1]);
+      if (rec) rec.revert = { merge: p[3], commit: p[4], who: p[5], at: p[6] };
     } else if (p[0] === 'NOTE' && p.length >= 3) {
       const rec = byLane.get(p[1]);
       if (rec) rec.notes = [...(rec.notes ?? []), p[2]];

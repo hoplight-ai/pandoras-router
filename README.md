@@ -109,9 +109,19 @@ An empty section prints one sentence saying so — a quiet board, not a proven-c
 reads CLAIMS.md, LANES.md, the bridge and, for each open lane, the filesystem and git; it writes
 nothing, the same as `alloc`.
 
+`land` puts a lane on main as one merge commit and writes a LAND record carrying the branch tip and
+the merge sha, precisely so undoing it later is one lookup and one command. `revert <lane>` is that
+command: it finds the lane's LAND record, reverses the merge with `git revert -m 1 <merge>`, and
+writes a REVERT record saying so. **It adds a commit; it never rewrites history.** It never
+force-pushes and it never deletes a branch — the lane's branch keeps pointing at the exact commit it
+always did, because that tip is still the record of what the lane wrote, and reversing the merge on
+main does not make it untrue. It does not push, either: it stops after the local commit and prints
+the one line to run next: push the lane's own branch and open a pull request. Pushing main is a
+separate, later act, never this command's.
+
 `node src/bin/router.mjs` with no arguments lists the subcommands: `board`, `alloc`, `open`,
-`close`, `land`, `claim`, `apply`, `check`. `alloc` and `board` write no record; they only produce
-cards or reports, and `check` writes nothing at all.
+`close`, `land`, `revert`, `claim`, `apply`, `check`. `alloc` and `board` write no record; they
+only produce cards or reports, and `check` writes nothing at all.
 
 ## The two ideas
 

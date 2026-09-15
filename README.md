@@ -383,6 +383,53 @@ surprise on the day it matters.
 - All three guards append one line per refusal to `hooks/guard-log.jsonl` (gitignored) when the
   harness supplies a session id, and nothing on a pass.
 
+### Switching the three guards on
+
+Nothing in `hooks/` runs on its own. Each is a `PreToolUse` hook: the harness hands it one JSON
+object on stdin describing the call it is about to make, and the hook answers allow or deny. They
+are wired in your agent harness's settings file — `.claude/settings.json` inside a project, or
+`~/.claude/settings.json` to cover every project. Paste this into it, replacing `<path-to-this-repo>`
+with wherever this repository sits on your machine (inside a project that *is* this repository,
+`$CLAUDE_PROJECT_DIR` works and needs no editing):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "node \"<path-to-this-repo>/hooks/guard-irreversible.mjs\"" }]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [{ "type": "command", "command": "node \"<path-to-this-repo>/hooks/guard-report-overwrite.mjs\"" }]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [{ "type": "command", "command": "node \"<path-to-this-repo>/hooks/guard-wide-read.mjs\"" }]
+      }
+    ]
+  }
+}
+```
+
+Three notes on the matchers, because each one is a choice rather than an obvious default:
+
+- **The irreversible-action guard reads SQL as well as shell.** The `Bash` matcher above covers the
+  command line. If your harness also reaches a database through a tool of its own, add a second
+  entry whose matcher is that tool's name — the guard looks for `execute_sql` and `apply_migration`
+  in the name it is given and reads the statement out of the call's `query` field. A database tool
+  you do not list is a database tool this guard never sees.
+- **`Write`, not `Write|Edit`, for the report guard.** It exists to stop a whole-file replace
+  landing on top of an existing report; a targeted edit to your own report is the thing it tells
+  you to do instead, so matching `Edit` would refuse the fix along with the mistake.
+- **`Read` alone for the wide-read gate**, which refuses only a whole-file read of a large text
+  file and always allows a read that names a range.
+
+Then set `PANDORAS_UNLOCK_PHRASE` in your environment to a phrase of your own, or the
+irreversible-action guard has no unlock at all and refuses every gated command. That is a safe
+state, not a broken one, but it is not the state most people want.
+
 ## Contributing, and reporting a security problem
 
 [CONTRIBUTING.md](CONTRIBUTING.md) covers how to run the suite, what a pull request needs, and the

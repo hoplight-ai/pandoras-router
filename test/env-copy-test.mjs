@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { copyEnvFile, filterEnvLines } from '../src/bin/lane-open.mjs';
+import { copyEnvFile, envCopyPlan, filterEnvLines } from '../src/bin/lane-open.mjs';
 import { loadPolicy, repoPolicy } from '../src/lib/policy.mjs';
 
 const tests = [];
@@ -53,6 +53,42 @@ function modeOf(p) {
   return fs.statSync(p).mode & 0o777;
 }
 
+// ── THE WINDOW BETWEEN CREATING A CREDENTIAL FILE AND MAKING IT PRIVATE ────────────────────────
+//
+// A final mode of 600 does not prove the file was never readable. Creating it at the process
+// umask and chmodding it afterwards leaves a window — short, but a window — in which every account
+// on the machine can read a credential. The final-mode assertions below cannot see that window:
+// they pass either way.
+//
+// So this records the mode the file has the FIRST MOMENT IT EXISTS, by wrapping every fs call that
+// can create it and stat-ing the path as soon as that call returns. `modes[0]` is what any other
+// process would have seen. It must already be 0o600; a later chmod cannot un-ring that bell.
+//
+// The umask is forced to the common 0o022 for the duration, so "created at the umask" is 0o644
+// here on any machine, rather than accidentally being 0o600 on an operator whose umask is 0o077.
+const CREATING_CALLS = ['openSync', 'writeFileSync', 'copyFileSync', 'chmodSync'];
+function modesWhileCreating(destPath, fn) {
+  const modes = [];
+  const originals = new Map();
+  const prevUmask = POSIX_MODES ? process.umask(0o022) : null;
+  for (const name of CREATING_CALLS) {
+    const original = fs[name];
+    originals.set(name, original);
+    fs[name] = (...args) => {
+      const r = original(...args);
+      try { if (fs.existsSync(destPath)) modes.push(modeOf(destPath)); } catch { /* not yet there */ }
+      return r;
+    };
+  }
+  try {
+    fn();
+  } finally {
+    for (const [name, original] of originals) fs[name] = original;
+    if (prevUmask !== null) process.umask(prevUmask);
+  }
+  return modes;
+}
+
 // ---------------------------------------------------------------- filterEnvLines (pure)
 
 T('filterEnvLines keeps only listed keys, drops comments and blanks, preserves file order', () => {
@@ -91,16 +127,54 @@ T('RED-PROOF copyEnvFile with an allowlist writes exactly those keys, in file or
   }
 });
 
-T('a repo with no env row keeps today\'s behaviour: the whole file, comment included, mode 600', () => {
+// ── A REPOSITORY WITH NO `env` ROW GETS NOTHING ───────────────────────────────────────────────
+//
+// The default used to be copy-everything: a repo whose policy said nothing about credentials had
+// its whole `.env.local` multiplied into every worktree the router created. The allowlist work
+// narrowed WHAT was copied where a row existed; it never changed the default. These three
+// assertions pin the flipped default, and the first two are the ones that go red if anybody
+// restores it.
+
+T('RED-PROOF envCopyPlan copies nothing when the policy names no keys for this repo', () => {
+  const plan = envCopyPlan({ inPlace: false, repoEnvExists: true, worktreeEnvExists: false, envKeys: null });
+  assert.equal(plan.copy, false,
+    `a repo with no env row must be copied nothing; the plan said copy because "${plan.why}"`);
+  assert.match(plan.why, /policy|env table|no env row/i, 'the reason names the policy, so a reader knows where to turn it on');
+});
+
+T('RED-PROOF a repo with no env row gets no credential file at all, and is told in one sentence how to turn copying on', () => {
   const repoDir = mkTmp('env-copy-repo-');
   const checkoutDir = mkTmp('env-copy-checkout-');
   try {
     fs.writeFileSync(path.join(repoDir, '.env.local'), FIXTURE_ENV);
-    const r = copyEnvFile({ repoDir, checkoutDir, inPlace: false, envKeys: null });
-    assert.equal(r.copied, true);
-    const worktreeEnvPath = path.join(checkoutDir, '.env.local');
-    assert.equal(fs.readFileSync(worktreeEnvPath, 'utf8'), FIXTURE_ENV);
-    if (POSIX_MODES) assert.equal(modeOf(worktreeEnvPath), 0o600);
+    /** @type {ReturnType<typeof copyEnvFile>} assigned inside the captured callback, which runs synchronously */
+    let r;
+    const log = withCapturedLog(() => {
+      r = copyEnvFile({ repoDir, checkoutDir, inPlace: false, envKeys: null });
+    });
+    assert.equal(r.copied, false, 'nothing is copied without an env row');
+    assert.equal(fs.existsSync(path.join(checkoutDir, '.env.local')), false,
+      'the whole credential file was copied into the checkout even though the policy named no keys');
+    assert.ok(log.some((l) => /env table/i.test(l) && /POLICY\.md/i.test(l)),
+      `open must print one plain sentence naming the env table in POLICY.md as the way to switch copying on; got: ${JSON.stringify(log)}`);
+  } finally {
+    fs.rmSync(repoDir, { recursive: true, force: true });
+    fs.rmSync(checkoutDir, { recursive: true, force: true });
+  }
+});
+
+T('an empty key list is the same as no row: nothing is copied', () => {
+  const repoDir = mkTmp('env-copy-repo-');
+  const checkoutDir = mkTmp('env-copy-checkout-');
+  try {
+    fs.writeFileSync(path.join(repoDir, '.env.local'), FIXTURE_ENV);
+    /** @type {ReturnType<typeof copyEnvFile>} assigned inside the captured callback, which runs synchronously */
+    let r;
+    withCapturedLog(() => {
+      r = copyEnvFile({ repoDir, checkoutDir, inPlace: false, envKeys: [] });
+    });
+    assert.equal(r.copied, false);
+    assert.equal(fs.existsSync(path.join(checkoutDir, '.env.local')), false);
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
     fs.rmSync(checkoutDir, { recursive: true, force: true });
@@ -127,6 +201,32 @@ T('a listed key the source file lacks is printed by name as missing, and the cop
     fs.rmSync(checkoutDir, { recursive: true, force: true });
   }
 });
+
+T('RED-PROOF the allowlisted copy is CREATED private: mode 600 the first moment it exists, not chmodded afterwards', () => {
+  if (!POSIX_MODES) return;
+  const repoDir = mkTmp('env-copy-repo-');
+  const checkoutDir = mkTmp('env-copy-checkout-');
+  try {
+    fs.writeFileSync(path.join(repoDir, '.env.local'), FIXTURE_ENV);
+    const worktreeEnvPath = path.join(checkoutDir, '.env.local');
+    let seen = [];
+    withCapturedLog(() => {
+      seen = modesWhileCreating(worktreeEnvPath, () => {
+        copyEnvFile({ repoDir, checkoutDir, inPlace: false, envKeys: ['ALPHA_KEY', 'BETA_KEY'] });
+      });
+    });
+    assert.ok(seen.length, 'the copy was never created, so there is nothing to measure');
+    assert.equal(seen[0].toString(8), '600',
+      `the allowlisted credential copy first existed at mode ${seen[0].toString(8)}, readable by every account on the machine until a later chmod; create it with mode 600 instead`);
+  } finally {
+    fs.rmSync(repoDir, { recursive: true, force: true });
+    fs.rmSync(checkoutDir, { recursive: true, force: true });
+  }
+});
+
+// The companion assertion on the whole-file copy path was removed with the path itself: since the
+// default flipped, no argument to copyEnvFile writes a whole credential file, so there is nothing
+// left to measure. The allowlisted write above is now the only way a file is created here.
 
 T('copyEnvFile never overwrites a worktree .env.local that already exists, allowlist or not', () => {
   const repoDir = mkTmp('env-copy-repo-');
@@ -168,7 +268,8 @@ T('loadPolicy parses the optional env table into repoPolicy(...).env, space-sepa
     fs.writeFileSync(path.join(root, '_handoffs', '_lanes', 'POLICY.md'), text);
     const policy = loadPolicy(root);
     assert.deepEqual(repoPolicy(policy, 'demo').env, ['ALPHA_KEY', 'BETA_KEY']);
-    // "other" has no row in the env table: absence means "copy whole file", asserted here as null.
+    // "other" has no row in the env table. Absence is null, and null now means "copy nothing" —
+    // it used to mean "copy the whole file", which is the default this lane flipped.
     assert.equal(repoPolicy(policy, 'other').env, null);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

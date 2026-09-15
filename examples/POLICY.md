@@ -54,6 +54,10 @@ Any other value refuses to load, and the error lists these five. When a sha or h
 reach its endpoint, the gate records skip or no with the reason; it never falls back to the string
 probe. The sha and header forms take auth and timeout from the repo's `liveness` row when it has one.
 
+`url` is an absolute `http://` or `https://` URL, or `-` for a repo that serves nothing. Anything
+else refuses to load and names the repo and the value — the same rule the liveness table's own url
+has always been held to.
+
 <!-- table: repos -->
 
 | repo | tier | writers | dispatch | port | deploy | verify | url |
@@ -125,11 +129,12 @@ lanes sharing the hazard serialize and two lanes sharing nothing still run side 
 
 ## Env — the allowlist for a fresh worktree's `.env.local`
 
-OPTIONAL. `lane-open` copies the repo's `.env.local` into every fresh worktree so a lane's first
-job doesn't fail cold on a missing credential; without this table that copy is the whole file, key
-by key, into every checkout that opens. A row here narrows one repo's copy to exactly the named
-keys — space-separated, names only, no values live in this file — so a lane that needs one key
-stops receiving all of them. A repo absent from this table keeps the old behaviour, unchanged.
+OPTIONAL, and it is the only thing that lets a credential out of a repository. `lane-open` copies
+`.env.local` keys into a fresh worktree so a lane's first job doesn't fail cold on a missing
+credential, and it copies exactly the keys a row here names — space-separated, names only, no
+values live in this file. **A repo absent from this table gets nothing**, and `open` prints one
+line naming the row to add. That default used to be the whole file into every checkout; it was
+flipped so a credential leaves a repository only because somebody wrote its name down.
 
 <!-- table: env -->
 

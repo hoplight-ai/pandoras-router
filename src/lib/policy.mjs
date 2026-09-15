@@ -80,6 +80,18 @@ export function loadPolicy(root) {
     if (!r.dispatch) throw new Error(`policy: repo "${r.repo}" has no dispatch seat; every repo names exactly one`);
     if (!seatAllowed(r.dispatch)) throw new Error(`policy: repo "${r.repo}" names dispatch "${r.dispatch}"; must be one of ${[...SEATS].join(', ')}`);
 
+    // ── THE SAME RULE AS THE LIVENESS TABLE'S URL, AND FOR THE SAME REASON ─────────────────────
+    //
+    // parseLiveness has refused a non-absolute URL since it was written, naming the repo and the
+    // value. This column was taken verbatim, so `example.com/app`, `/app` and `javascript:...`
+    // all parsed clean here and were only ever discovered by whatever used them later, with a
+    // message about something else. A policy file is trusted input; trusted input still gets to
+    // be wrong, and the line that reads it is the cheap place to say so. `-` still means the repo
+    // declares no url at all.
+    const url = String(r.url ?? '').trim();
+    if (url !== '-' && !/^https?:\/\//i.test(url))
+      throw new Error(`policy: repo "${r.repo}" has url "${url}"; must be an absolute http(s) URL`);
+
     repos.set(r.repo, {
       repo: r.repo,
       tier,
@@ -88,7 +100,7 @@ export function loadPolicy(root) {
       port: r.port === '-' ? null : Number(r.port),
       deploy: r.deploy,
       verify: parseVerify(r.repo, r.verify),
-      url: r.url === '-' ? null : r.url,
+      url: url === '-' ? null : url,
       traps: [],
       owner: null,
       exclusive: [],
@@ -170,10 +182,12 @@ export function loadPolicy(root) {
 
   // ENV (Router ENV1, 2026-09-14). A per-repo allowlist of `.env.local` variable NAMES — never
   // values, only names, and this file never sees a value — that `lane-open` copies into a fresh
-  // worktree. OPTIONAL, in the same shape as `exclusive` and `traps` above: a repo absent from this
-  // table gets today's behaviour, unchanged — the whole file is copied. A repo present here gets
-  // ONLY the named keys; see copyEnvFile in bin/lane-open.mjs for the disk half and what happens to
-  // a listed key the source file lacks. `keys` is a space-separated list read straight off the row.
+  // worktree. OPTIONAL, in the same shape as `exclusive` and `traps` above, and this table is the
+  // ONLY thing that makes a copy happen: a repo absent from it keeps `env: null` and gets NOTHING,
+  // which is the safe default — a credential leaves the repository only because somebody wrote its
+  // name down here. A repo present gets exactly the named keys; see copyEnvFile in
+  // bin/lane-open.mjs for the disk half and what happens to a listed key the source file lacks.
+  // `keys` is a space-separated list read straight off the row.
   if (/<!--\s*table:\s*env\s*-->/i.test(text)) {
     for (const e of readTable(text, 'env')) {
       const rec = repos.get(e.repo);

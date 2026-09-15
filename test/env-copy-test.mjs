@@ -168,6 +168,7 @@ T('an empty key list is the same as no row: nothing is copied', () => {
   const checkoutDir = mkTmp('env-copy-checkout-');
   try {
     fs.writeFileSync(path.join(repoDir, '.env.local'), FIXTURE_ENV);
+    /** @type {ReturnType<typeof copyEnvFile>} assigned inside the captured callback, which runs synchronously */
     let r;
     withCapturedLog(() => {
       r = copyEnvFile({ repoDir, checkoutDir, inPlace: false, envKeys: [] });

@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The gates</title>
+<meta name="description" content="Every refusal in Pandora's Router: the seven close gates, the three report refusals that stop a close outright, and what the allocator refuses before a lane ever opens.">
+<meta name="theme-color" content="#F7F5F0">
+<meta property="og:type" content="article">
+<meta property="og:title" content="The gates">
+<meta property="og:description" content="Every refusal in Pandora's Router: the seven close gates, the three report refusals that stop a close outright, and what the allocator refuses before a lane ever opens.">
+<meta property="og:url" content="https://pandoras-router.vercel.app/gates.html">
+<meta property="og:image" content="https://pandoras-router.vercel.app/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="apple-mobile-web-app-title" content="Router">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<a class="skip" href="#main">Skip to the text</a>
+
+<header class="top">
+  <div class="shell">
+    <a class="mark" href="index.html">Pandora's Router</a>
+    <nav aria-label="Primary">
+      <a href="index.html">Overview</a>
+      <a href="gates.html" aria-current="page">The gates</a>
+      <a href="https://github.com/hoplight-ai/pandoras-router">Source</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main" class="shell">
+
+  <div class="opening">
+
+    <div class="intro-head">
+      <h1>The gates</h1>
+
+      <p class="lede">Everything this tool refuses, and why it refuses it rather than warning. A
+      warning that fires on ordinary work gets muted within a week; a refusal that fires on ordinary
+      work gets fixed.</p>
+
+      <p class="actions">
+        <a class="button" href="index.html">Back to the overview</a>
+        <a class="quiet" href="https://github.com/hoplight-ai/pandoras-router">Source on GitHub</a>
+      </p>
+    </div>
+
+    <div class="intro-rest">
+      <h2 class="flush">The five verdict values</h2>
+
+      <p>Every gate records one of five words, and three of them are passes. The distinction between
+      the two failing words is the important one.</p>
+
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Value</th><th>Meaning</th><th>Grade</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="gate">yes</td><td>Measured, and it passed.</td><td>pass</td></tr>
+            <tr><td class="gate">n/a</td><td>Structurally nothing to measure: no branch, no deployed surface, no declared scope.</td><td>pass</td></tr>
+            <tr><td class="gate">exempt</td><td>Measured, and a refusal was the correct answer. A gated product refusing an unauthenticated probe is working.</td><td>pass</td></tr>
+            <tr><td class="gate fail">no</td><td>Measured, and it failed. A real red.</td><td>fail</td></tr>
+            <tr><td class="gate fail">skip</td><td>Nothing was measured, for a named reason.</td><td>fail</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <blockquote>
+        <p>A skip is not a pass. Neither <code>n/a</code> nor <code>exempt</code> claims the build
+        was verified, and every close that records one says so in words. In an old ledger row a
+        <code>-</code> means the gate did not exist when that line was written, which is not a pass
+        either.</p>
+      </blockquote>
+    </div>
+
+    <figure class="drawing">
+      <figcaption class="caption">One close, measured. DONE needs all seven; one failure names
+      itself and the grade drops.</figcaption>
+
+      <svg class="spine wide" viewBox="0 0 520 760" role="img" aria-labelledby="close-t close-d">
+        <title id="close-t">The seven gates a close measures, and what each one refuses</title>
+        <desc id="close-d">Merged refuses content that is not on main. Green refuses a build nobody
+        observed. Live refuses a deployment that is not serving this build. Renamed refuses a brief
+        still wearing a live filename. In-scope refuses a branch that wrote outside its declaration.
+        Findings refuses a problem raised with no fix attached. No-side-files refuses a new
+        tracker-shaped file. All seven passing is DONE; any one failing is PARTIAL with that gate
+        named.</desc>
+
+        <path class="line" d="M170 24 V 700"/>
+
+        <g class="drawn d1">
+          <circle class="node" cx="170" cy="44" r="5.5"/>
+          <text class="stage" x="152" y="49" text-anchor="end">merged</text>
+          <path class="branch" d="M170 60 L 216 82 H 256"/>
+          <path class="dead" d="M256 74 V 90"/>
+          <text class="refuse" x="266" y="86">content not on main</text>
+        </g>
+
+        <g class="drawn d2">
+          <circle class="node" cx="170" cy="144" r="5.5"/>
+          <text class="stage" x="152" y="149" text-anchor="end">green</text>
+          <path class="branch" d="M170 160 L 216 182 H 256"/>
+          <path class="dead" d="M256 174 V 190"/>
+          <text class="refuse" x="266" y="186">no build observed</text>
+        </g>
+
+        <g class="drawn d3">
+          <circle class="node" cx="170" cy="244" r="5.5"/>
+          <text class="stage" x="152" y="249" text-anchor="end">live</text>
+          <path class="branch" d="M170 260 L 216 282 H 256"/>
+          <path class="dead" d="M256 274 V 290"/>
+          <text class="refuse" x="266" y="286">not serving this build</text>
+        </g>
+
+        <g class="drawn d4">
+          <circle class="node" cx="170" cy="344" r="5.5"/>
+          <text class="stage" x="152" y="349" text-anchor="end">renamed</text>
+          <path class="branch" d="M170 360 L 216 382 H 256"/>
+          <path class="dead" d="M256 374 V 390"/>
+          <text class="refuse" x="266" y="386">brief still reads live</text>
+        </g>
+
+        <g class="drawn d5">
+          <circle class="node" cx="170" cy="444" r="5.5"/>
+          <text class="stage" x="152" y="449" text-anchor="end">in-scope</text>
+          <path class="branch" d="M170 460 L 216 482 H 256"/>
+          <path class="dead" d="M256 474 V 490"/>
+          <text class="refuse" x="266" y="486">wrote outside scope</text>
+        </g>
+
+        <g class="drawn d6">
+          <circle class="node" cx="170" cy="544" r="5.5"/>
+          <text class="stage" x="152" y="549" text-anchor="end">findings</text>
+          <path class="branch" d="M170 560 L 216 582 H 256"/>
+          <path class="dead" d="M256 574 V 590"/>
+          <text class="refuse" x="266" y="586">no fix attached</text>
+        </g>
+
+        <g class="drawn d7">
+          <circle class="node" cx="170" cy="644" r="5.5"/>
+          <text class="stage" x="152" y="649" text-anchor="end">no-side-files</text>
+          <path class="branch" d="M170 660 L 216 682 H 256"/>
+          <path class="dead" d="M256 674 V 690"/>
+          <text class="refuse" x="266" y="686">a new tracker file</text>
+
+          <circle class="end" cx="170" cy="700" r="5.5"/>
+          <text class="pass" x="152" y="704" text-anchor="end">DONE</text>
+        </g>
+      </svg>
+
+      <svg class="spine narrow" viewBox="0 0 360 740" role="img" aria-labelledby="close-t2 close-d2">
+        <title id="close-t2">The seven gates a close measures, and what each one refuses</title>
+        <desc id="close-d2">Merged refuses content that is not on main. Green refuses a build nobody
+        observed. Live refuses a deployment that is not serving this build. Renamed refuses a brief
+        still wearing a live filename. In-scope refuses a branch that wrote outside its declaration.
+        Findings refuses a problem raised with no fix attached. No-side-files refuses a new
+        tracker-shaped file. All seven passing is DONE; any one failing is PARTIAL with that gate
+        named.</desc>
+
+        <path class="line" d="M28 20 V 700"/>
+
+        <g class="drawn d1">
+          <circle class="node" cx="28" cy="40" r="5.5"/>
+          <text class="stage" x="46" y="45">merged</text>
+          <path class="branch" d="M28 56 L 54 78 H 76"/>
+          <path class="dead" d="M76 70 V 86"/>
+          <text class="refuse" x="86" y="82">content not on main</text>
+        </g>
+
+        <g class="drawn d2">
+          <circle class="node" cx="28" cy="136" r="5.5"/>
+          <text class="stage" x="46" y="141">green</text>
+          <path class="branch" d="M28 152 L 54 174 H 76"/>
+          <path class="dead" d="M76 166 V 182"/>
+          <text class="refuse" x="86" y="178">no build observed</text>
+        </g>
+
+        <g class="drawn d3">
+          <circle class="node" cx="28" cy="232" r="5.5"/>
+          <text class="stage" x="46" y="237">live</text>
+          <path class="branch" d="M28 248 L 54 270 H 76"/>
+          <path class="dead" d="M76 262 V 278"/>
+          <text class="refuse" x="86" y="274">not serving this build</text>
+        </g>
+
+        <g class="drawn d4">
+          <circle class="node" cx="28" cy="328" r="5.5"/>
+          <text class="stage" x="46" y="333">renamed</text>
+          <path class="branch" d="M28 344 L 54 366 H 76"/>
+          <path class="dead" d="M76 358 V 374"/>
+          <text class="refuse" x="86" y="370">brief still reads live</text>
+        </g>
+
+        <g class="drawn d5">
+          <circle class="node" cx="28" cy="424" r="5.5"/>
+          <text class="stage" x="46" y="429">in-scope</text>
+          <path class="branch" d="M28 440 L 54 462 H 76"/>
+          <path class="dead" d="M76 454 V 470"/>
+          <text class="refuse" x="86" y="466">wrote outside scope</text>
+        </g>
+
+        <g class="drawn d6">
+          <circle class="node" cx="28" cy="520" r="5.5"/>
+          <text class="stage" x="46" y="525">findings</text>
+          <path class="branch" d="M28 536 L 54 558 H 76"/>
+          <path class="dead" d="M76 550 V 566"/>
+          <text class="refuse" x="86" y="562">no fix attached</text>
+        </g>
+
+        <g class="drawn d7">
+          <circle class="node" cx="28" cy="616" r="5.5"/>
+          <text class="stage" x="46" y="621">no-side-files</text>
+          <path class="branch" d="M28 632 L 54 654 H 76"/>
+          <path class="dead" d="M76 646 V 662"/>
+          <text class="refuse" x="86" y="658">a new tracker file</text>
+
+          <circle class="end" cx="28" cy="700" r="5.5"/>
+          <text class="pass" x="46" y="704">DONE</text>
+        </g>
+      </svg>
+    </figure>
+
+  </div>
+
+  <div class="body">
+   <div class="track">
+
+    <section>
+      <h2>The seven gates a close measures</h2>
+
+      <p>DONE requires all seven. Anything else is PARTIAL, with the failing gates named in the
+      reason line, so a lane cannot report DONE and then list a barred step underneath it.</p>
+
+      <h3>merged</h3>
+
+      <p>Refuses a branch whose content is not on main. It compares the blob of every path the
+      branch touched in three trees: the merge base, the branch, and <code>origin/main</code>. Not
+      git ancestry, because a squash merge copies a branch's changes onto main and throws the commit
+      fingerprints away, so <code>git branch --merged</code> says "not merged" about work that is
+      fully shipped. A path that main moved under the branch is reported as moved rather than graded
+      either way. A lane with no branch, running in place on a target that is not a git repository,
+      records <code>n/a</code>.</p>
+
+      <h3>green</h3>
+
+      <p>Refuses a build that was not observed green: <code>npm run build</code> in the lane's own
+      checkout, exit 0. Running the close with <code>--no-build</code> records <code>skip</code>,
+      not a pass, so choosing not to build cannot produce a DONE.</p>
+
+      <h3>live</h3>
+
+      <p>Refuses a deployment that was not proved to be serving this build. The close issues a GET
+      at the URL the repo's policy row names and reads the body. Two proof forms:</p>
+
+      <ul class="verdicts">
+        <li><span class="v">commit echo</span> <span>The deployment reports its own release, and the
+        gate requires it to equal or contain the branch head. This is the only form that cannot pass
+        on stale bytes.</span></li>
+        <li><span class="v">proof string</span> <span>A string that must appear in the response. The
+        gate refuses a proof string that is not new in this branch's own diff. A string already on
+        main proves nothing about whether this deploy landed, and an assertion every build passes is
+        not an assertion.</span></li>
+      </ul>
+
+      <p>Credentials are named, never stored. A policy row carries the name of an environment
+      variable; the value is read at probe time and never printed, not in a verdict and not in an
+      error. If the variable is unset the probe is not sent bare, because grading the resulting 401
+      would measure the credential rather than the deployment. That case is a <code>skip</code>
+      naming the variable.</p>
+
+      <h3>renamed</h3>
+
+      <p>Refuses a brief that still carries no closed prefix, because the next dispatch will read it
+      as live and fire it a second time. The lane id has to appear in the brief's filename as a
+      whole hyphen-delimited token, never as a substring, so lane <code>ops-l1</code> does not match
+      a file belonging to <code>ops-l14</code>.</p>
+
+      <h3>in-scope</h3>
+
+      <p>Refuses a branch that touched files outside the scope its lane declared at open. This is
+      the other end of the allocator's promise: proving two scopes disjoint before dispatch is worth
+      nothing if a lane can then edit outside its declaration. Every path from the merge gate's own
+      diff is tested for containment in the declared scope, with a small allowlist for files a
+      required procedure regenerates. A lane that declared nothing records <code>n/a</code>, having
+      already paid for it by serializing against the whole repo.</p>
+
+      <h3>findings</h3>
+
+      <p>Refuses a problem raised with no solution attached. A report line in this shape:</p>
+
+<pre><code>FINDING: &lt;what&gt; | fix: &lt;the fix&gt; | size: small|medium|large | owner: &lt;seat or owner&gt;</code></pre>
+
+      <p>A line missing the fix, a valid size, or an owner fails the gate and is quoted back
+      verbatim. A report with zero findings passes: the gate polices completeness, never quantity. A
+      <code>small</code> finding assigned to the human owner is refused outright, because a small
+      thing the lane could have done itself is not a decision to hand upward.</p>
+
+      <h3>no-side-files</h3>
+
+      <p>Refuses a new tracker-shaped file on the bridge: <code>REFERENCE-*.md</code>,
+      <code>SWEEP-*.md</code>, <code>TRIAGE-*.md</code>. The project already has a tracker, and a
+      second static surface beside it is a place for facts to go stale.</p>
+
+      <p>A window is not an attribution. Many lanes run at once, so a matching file counts against a
+      lane only if its body names the lane or the brief's title, or it sits in the lane's own branch
+      diff, or the lane's own report names it. A file that appeared during the window and matches
+      none of the three prints one warning line and does not fail the gate. The opt-out is explicit
+      and printed, never inferred: a <code>Side-file: allowed</code> line in the brief's header
+      makes the gate <code>n/a</code>.</p>
+    </section>
+
+    <section>
+      <h2>Three gates the grader supports and this driver does not measure</h2>
+
+      <p>Named here so their absence is visible rather than mistaken for a pass. The grader accepts
+      a verdict for each; the shipped close driver records them as not measured, and they do not
+      affect the grade.</p>
+
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Gate</th><th>What it would refuse</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="gate">owner-way-in</td>
+              <td>A live deployment the owner's stored credential no longer opens. When it fails it
+              leads the reason line, ahead of every other failure: a product the owner cannot open
+              is the first sentence, not a line item.</td>
+            </tr>
+            <tr>
+              <td class="gate">report-free</td>
+              <td>A report filename already taken, where writing would land on top of another lane's
+              report. The derived filename carries the lane, so two sessions of one brief produce
+              two different names, and a taken name gets a numbered variant.</td>
+            </tr>
+            <tr>
+              <td class="gate">roadmap</td>
+              <td>A brief that cites no board row, so finishing it moves nothing anybody can
+              see.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <h2>Three refusals that stop a close entirely</h2>
+
+      <p>These are not gates. A failing gate makes the close PARTIAL and the close still happens.
+      These three abort it: nothing is recorded, nothing is renamed, no worktree is removed, no
+      claim is released, and the same is true on a dry run. The disagreement is between the report
+      and itself, and no grade can be recorded honestly until a person resolves it.</p>
+
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Condition</th><th>What triggers it</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="gate fail">no-status-word</td>
+              <td>The report carries no DONE, PARTIAL or BLOCKED. A report with no status word is
+              unreadable as a scope claim, whatever the gates measured.</td>
+            </tr>
+            <tr>
+              <td class="gate fail">done-without-evidence</td>
+              <td>STATUS DONE with no <code>Evidence:</code> line naming the verification run, its
+              result and the date. Without one, the <code>done-</code> prefix means consumed and
+              nothing more.</td>
+            </tr>
+            <tr>
+              <td class="gate fail">done-honest-unaddressed</td>
+              <td>STATUS DONE beside a body that names a skipped, barred or deferred step. A
+              reviewer's objection has two valid answers, fix it or overrule it in writing, and
+              silence is not a third. An <code>overruled:</code> line naming the check lets the
+              close through; nothing else does.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>A report that says PARTIAL or BLOCKED in its own words is a separate rule and a softer one:
+      it lowers a grade of DONE to match, and it never raises one. The status word inside the report
+      is the only scope claim the lane gets to make, and it outranks a passing gate grade.</p>
+    </section>
+
+    <section>
+      <h2>What the allocator refuses before a lane opens</h2>
+
+      <p>Half the value is here, before any agent runs. None of these produce a warning; each one
+      keeps the lane out of the FIRE NOW list and prints the reason.</p>
+
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Refusal</th><th>Why</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Scope overlap</td>
+              <td>The lane is queued behind the one it collides with, and the card names the paths
+              where the two scopes intersect. Opening it anyway needs an explicit override, which is
+              written into the ledger, because deciding to run it regardless is a decision somebody
+              should be able to find later.</td>
+            </tr>
+            <tr>
+              <td>Repo at its writer cap</td>
+              <td>A repo declares how many sessions may hold it at once. A cap above 1 is only safe
+              because every concurrent pair was proved disjoint by path comparison.</td>
+            </tr>
+            <tr>
+              <td>No policy row</td>
+              <td>A repo that is not in the policy table routes nothing. Guessing its deploy style
+              or verification method is how a change ships that nobody proved.</td>
+            </tr>
+            <tr>
+              <td>No readable target</td>
+              <td>A brief whose routing block names no repo is not carded, and the router will not
+              infer the target from the prose.</td>
+            </tr>
+            <tr>
+              <td>Unrecognized filename word</td>
+              <td>The lifecycle vocabulary lives in a file. An unknown word routes nothing and is
+              printed with the word it should have been. Three detectors catch the dangerous cases:
+              a denied list of synonyms, any unlisted past participle, and any token within one
+              character of a real one. A typo in a lifecycle word would otherwise resurrect a closed
+              brief.</td>
+            </tr>
+            <tr>
+              <td>Already closed</td>
+              <td>A brief whose lane already filed a CLOSE record is finished work wearing a live
+              filename. It is refused unless its header declares that it is meant to refire, and the
+              card says so in both directions.</td>
+            </tr>
+            <tr>
+              <td>Held elsewhere</td>
+              <td>A repo belonging to another dispatcher is skipped by name rather than silently
+              omitted.</td>
+            </tr>
+            <tr>
+              <td>Held until a date</td>
+              <td>A brief with a not-before date stays visible and carded the whole time it is held,
+              rather than disappearing from the board on the day somebody needs to see it.</td>
+            </tr>
+            <tr>
+              <td>Existing branch or checkout</td>
+              <td>Opening a lane refuses to reuse a branch name or a checkout directory that already
+              exists. Reusing a merged branch name is the consumed-name problem in git form.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>Two quieter refusals matter as much. A card whose scope is truncated by the display limit
+      is counted and named, because a work queue that truncates without saying so reads as "there is
+      nothing for you to do". And a lane left open with no close is flagged as orphaned and stops
+      holding its slot, but is never auto-closed: writing a close record here would manufacture
+      measurements nobody took.</p>
+    </section>
+
+   </div>
+  </div>
+
+</main>
+
+<footer class="bottom">
+  <div class="shell">
+    MIT licensed.
+    <a href="https://github.com/hoplight-ai/pandoras-router">Source on GitHub</a>.
+  </div>
+</footer>
+
+</body>
+</html>

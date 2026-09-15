@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Router site designs, side by side</title>
+<meta name="description" content="The three router site designs running live next to each other, scrolling together, on a laptop width or a phone width.">
+<meta name="theme-color" content="#E9E8E4">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Router site designs, side by side">
+<meta property="og:description" content="The three router site designs running live next to each other, scrolling together, on a laptop width or a phone width.">
+<meta property="og:image" content="https://pandoras-router.vercel.app/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="apple-mobile-web-app-title" content="Side by side">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="favicon.ico" sizes="any">
+<style>
+  :root {
+    --ground: #E9E8E4; --ink: #1C1C1A; --muted: #6E6C66; --line: #CFCDC7; --card: #F6F5F2; --on: #1C1C1A;
+    --sans: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font: 15px/1.4 var(--sans); display: flex; flex-direction: column; }
+
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+  .bar h1 { font-size: 15px; font-weight: 600; margin: 0 8px 0 0; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+  .seg button { font: inherit; border: 0; background: var(--card); color: var(--ink); padding: 5px 12px; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--on); color: #fff; }
+  label.sync { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; }
+
+  .grid { flex: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; padding: 14px; min-height: 0; }
+  .col { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .col header { display: flex; align-items: baseline; gap: 10px; padding: 0 2px 8px; }
+  .col h2 { font-size: 15px; font-weight: 600; margin: 0; white-space: nowrap; }
+  .col p { margin: 0; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .col a { font-size: 13px; color: var(--ink); white-space: nowrap; }
+  .frame { flex: 1; position: relative; overflow: hidden; background: #fff; border: 1px solid var(--line); border-radius: 8px; min-height: 0; }
+  .frame.phone { background: transparent; border: 0; display: flex; justify-content: center; }
+  .frame iframe { position: absolute; top: 0; left: 0; border: 0; transform-origin: 0 0; background: #fff; }
+  .frame.phone iframe { position: relative; border: 1px solid var(--line); border-radius: 18px; flex: none; }
+
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: 1fr; grid-auto-rows: 80vh; }
+  }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <h1>Router site designs, side by side</h1>
+    <div class="seg" role="group" aria-label="Page">
+      <button type="button" data-page="index.html" aria-pressed="true">Home page</button>
+      <button type="button" data-page="gates.html" aria-pressed="false">Gates page</button>
+    </div>
+    <div class="seg" role="group" aria-label="Width">
+      <button type="button" data-width="1440" aria-pressed="true">Laptop</button>
+      <button type="button" data-width="390" aria-pressed="false">Phone</button>
+    </div>
+    <label class="sync"><input type="checkbox" id="sync" checked> Scroll together</label>
+  </div>
+
+  <main class="grid">
+    <section class="col" data-site="site-a">
+      <header><h2>A, the spine</h2><p>Warm paper, one line down the page</p><a target="_blank" rel="noopener">Open</a></header>
+      <div class="frame"><iframe title="Design A"></iframe></div>
+    </section>
+    <section class="col" data-site="site-b">
+      <header><h2>B, the switchboard</h2><p>Dark navy, drawing across the full width</p><a target="_blank" rel="noopener">Open</a></header>
+      <div class="frame"><iframe title="Design B"></iframe></div>
+    </section>
+    <section class="col" data-site="site-c">
+      <header><h2>C, the atlas</h2><p>A map that stays on screen as you read</p><a target="_blank" rel="noopener">Open</a></header>
+      <div class="frame"><iframe title="Design C"></iframe></div>
+    </section>
+  </main>
+
+<script>
+(() => {
+  const state = { page: 'index.html', width: 1440 };
+  const cols = [...document.querySelectorAll('.col')];
+  const sync = document.getElementById('sync');
+  let steering = false;
+
+  function fit() {
+    for (const col of cols) {
+      const box = col.querySelector('.frame');
+      const f = box.querySelector('iframe');
+      const phone = state.width < 600;
+      box.classList.toggle('phone', phone);
+      const scale = Math.min(1, (box.clientWidth - (phone ? 2 : 0)) / state.width);
+      f.style.width = state.width + 'px';
+      f.style.height = (box.clientHeight / scale) + 'px';
+      f.style.transform = `scale(${scale})`;
+      if (phone) { f.style.marginBottom = (box.clientHeight / scale) * (scale - 1) + 'px'; f.style.marginRight = state.width * (scale - 1) + 'px'; }
+      else { f.style.margin = '0'; }
+    }
+  }
+
+  function load() {
+    for (const col of cols) {
+      const src = `../${col.dataset.site}/${state.page}`;
+      const f = col.querySelector('iframe');
+      col.querySelector('a').href = src;
+      f.onload = () => hook(f);
+      f.src = src;
+    }
+    fit();
+  }
+
+  function hook(f) {
+    let w;
+    try { w = f.contentWindow; w.document; } catch { return; }
+    w.addEventListener('scroll', () => {
+      if (!sync.checked || steering) return;
+      const d = w.document.documentElement;
+      const share = w.scrollY / Math.max(1, d.scrollHeight - w.innerHeight);
+      steering = true;
+      for (const other of cols.map((c) => c.querySelector('iframe'))) {
+        if (other === f) continue;
+        try {
+          const ow = other.contentWindow, od = ow.document.documentElement;
+          ow.scrollTo(0, share * Math.max(0, od.scrollHeight - ow.innerHeight));
+        } catch {}
+      }
+      requestAnimationFrame(() => { steering = false; });
+    }, { passive: true });
+  }
+
+  document.querySelectorAll('[data-page]').forEach((b) => b.addEventListener('click', () => {
+    state.page = b.dataset.page;
+    document.querySelectorAll('[data-page]').forEach((x) => x.setAttribute('aria-pressed', x === b));
+    load();
+  }));
+  document.querySelectorAll('[data-width]').forEach((b) => b.addEventListener('click', () => {
+    state.width = Number(b.dataset.width);
+    document.querySelectorAll('[data-width]').forEach((x) => x.setAttribute('aria-pressed', x === b));
+    fit();
+  }));
+  addEventListener('resize', fit);
+  load();
+})();
+</script>
+</body>
+</html>

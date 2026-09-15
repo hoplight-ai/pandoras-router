@@ -78,8 +78,21 @@ PANDORAS_ROOT=/tmp/pandoras-demo node src/bin/router.mjs alloc
 One card now says FIRE NOW and the other says QUEUED, naming the lane it waits on and the three
 paths where the two scopes intersect. That refusal is the whole product.
 
+Before firing anything, ask whether the workspace itself is sound:
+
+```
+PANDORAS_ROOT=/tmp/pandoras-demo node src/bin/router.mjs check
+```
+
+It reads `POLICY.md`, `PREFIXES.md`, `CLAIMS.md` and `LANES.md` the same way every other subcommand
+does, and every bridge filename against the vocabulary, then prints one line per problem grouped by
+file and a final count. Against the demo workspace above it prints `OK` and exits 0. It reads and
+never writes — no ledger record, no claim, nothing on disk changes — and it exits non-zero the
+moment there is anything to fix, so `check && alloc` is a safe chain.
+
 `node src/bin/router.mjs` with no arguments lists the subcommands: `alloc`, `open`, `close`,
-`land`, `claim`, `apply`. `alloc` writes no record; it only produces cards.
+`land`, `claim`, `apply`, `check`. `alloc` writes no record; it only produces cards, and `check`
+writes nothing at all.
 
 ## The two ideas
 

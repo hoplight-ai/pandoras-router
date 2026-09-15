@@ -51,7 +51,11 @@ const CLOSE = path.join(REPO, 'src', 'bin', 'close.mjs');
 const LANES_MJS = pathToFileURL(path.join(REPO, 'src', 'lib', 'lanes.mjs')).href;
 const LOCK_MJS = pathToFileURL(path.join(REPO, 'src', 'lib', 'lock.mjs')).href;
 const BRIEF = 'Web-CEILING1-Raise-The-Per-Provider-Cap.md';
-const FAKE_LOCK_PRELOAD = path.join(HERE, 'fake-windows-lock-error.mjs');
+// `--import` takes a module SPECIFIER, not a filesystem path: on Windows a raw `D:\a\...\x.mjs`
+// does not start with `/`, `./` or `../`, so Node's loader reads it as a bare specifier (a package
+// name) and fails with an unrelated-looking `node:internal/modules/esm/load` error rather than
+// loading the file. A `file://` URL resolves identically on every platform.
+const FAKE_LOCK_PRELOAD = pathToFileURL(path.join(HERE, 'fake-windows-lock-error.mjs')).href;
 
 import { parseClaims } from '../src/lib/claims.mjs';
 import { parseLanes } from '../src/lib/lanes.mjs';

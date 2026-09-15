@@ -90,9 +90,26 @@ file and a final count. Against the demo workspace above it prints `OK` and exit
 never writes — no ledger record, no claim, nothing on disk changes — and it exits non-zero the
 moment there is anything to fix, so `check && alloc` is a safe chain.
 
-`node src/bin/router.mjs` with no arguments lists the subcommands: `alloc`, `open`, `close`,
-`land`, `claim`, `apply`, `check`. `alloc` writes no record; it only produces cards, and `check`
-writes nothing at all.
+Ask the same workspace what is going on in it right now, before firing anything:
+
+```
+PANDORAS_ROOT=/tmp/pandoras-demo node src/bin/router.mjs board
+```
+
+Four labelled sections, oldest and most informative first: **active claims** (who holds what, each
+one flagged when it has aged past the adjudication threshold or when one lane holds two claims on
+one repo), **open lanes** (every OPEN record with no CLOSE beside it, oldest first, because age is
+the signal), **recent closes** (everything that finished in the last 48 hours, marked when the same
+lane closed more than once — a sign its brief was never renamed and fired again), and **orphaned
+lanes** (an open lane whose worktree or branch is gone, whose report already landed, whose record
+outlived the active window with no CLOSE, or that holds no claim at all while still reading OPEN).
+An empty section prints one sentence saying so — a quiet board, not a proven-clean one. `board`
+reads CLAIMS.md, LANES.md, the bridge and, for each open lane, the filesystem and git; it writes
+nothing, the same as `alloc`.
+
+`node src/bin/router.mjs` with no arguments lists the subcommands: `board`, `alloc`, `open`,
+`close`, `land`, `claim`, `apply`, `check`. `alloc` and `board` write no record; they only produce
+cards or reports, and `check` writes nothing at all.
 
 ## The two ideas
 

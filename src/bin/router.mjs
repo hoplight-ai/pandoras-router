@@ -3,6 +3,8 @@
 // router.mjs — the one front door. Everything a dispatcher needs to route lanes is a subcommand
 // here, so nobody has to remember six script names or which one reads which file.
 //
+//   pandoras-router board      what is going on right now: claims, open lanes, recent closes,
+//                              orphaned lanes. Reads only, writes nothing
 //   pandoras-router alloc      ready-to-fire lane cards
 //   pandoras-router open       open a lane from a card   (creates only)
 //   pandoras-router close      the gate close            (measures; --apply to record)
@@ -27,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const MAP = {
+  board: ['board.mjs'],
   alloc: ['lane-alloc.mjs'],
   open: ['lane-open.mjs'],
   close: ['close.mjs'],

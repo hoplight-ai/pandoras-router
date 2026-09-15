@@ -7,9 +7,9 @@ before any of them start, then independently verify what each one claims it fini
 
 ## The problem
 
-Every tool in this category that I compared, fourteen at the time of writing, solves parallel agents with isolation. Give each agent its own git
-worktree or its own container and they stop fighting over one working directory. That is real and
-it is not enough. Two agents in two copies can still rewrite the same file, and nothing notices
+Every tool in this category that I compared solves parallel agents with isolation. Give each agent
+its own git worktree or its own container and they stop fighting over one working directory. That
+is real and it is not enough. Two agents in two copies can still rewrite the same file, and nothing notices
 until the merge, by which point both pieces of work exist and one of them has to lose.
 
 The second half is quieter. An agent's report that it finished is the least reliable signal in the
@@ -27,11 +27,13 @@ touch, and the report's own words. Files and git, nothing else.
 From the repo root:
 
 ```
+npm ci --ignore-scripts
 npm test
 ```
 
-CI runs this same command on every push and pull request, on Node 22 and 24, on Ubuntu, macOS and
-Windows (six matrix cells, `.github/workflows/ci.yml`).
+CI runs those same two commands on every push and pull request, on Node 22 and 24, on Ubuntu,
+macOS and Windows (six matrix cells, `.github/workflows/ci.yml`). The install is only for the type
+check at the end; see [Install](#install) for what it fetches and what pins it.
 
 Every suite prints its own assertion count as it runs, and how many of those are red-proof: each
 asserts a refusal, or that a weakening turns the suite red, so deleting a guard turns them red
@@ -44,10 +46,10 @@ the scope property suite (six properties over thousands of generated cases).
 
 The runner discovers its suites: every `*-test.mjs` file in `test/` runs, so a new suite needs no
 list edited. After the suites, `npm test` runs `npm run typecheck`, which holds the JSDoc in every
-file to the code it describes. The checker is fetched on first run through npx at pinned versions
-(TypeScript 6.0.3 and Node 22 type declarations) into npx's cache, so the package still has zero
-dependencies. Every file under `src/` and `hooks/` starts with `// @ts-check`, so an editor with
-Node types available checks it as you type.
+file to the code it describes. That check needs the TypeScript compiler and Node's type
+declarations, so run `npm ci --ignore-scripts` once before `npm test`; both are dev dependencies
+pinned to an exact version and the run itself downloads nothing. Every file under `src/` and
+`hooks/` starts with `// @ts-check`, so an editor with Node types available checks it as you type.
 
 Most measurements quoted in the code's comments are from the tool's first four weeks in use on
 one operator's board: 511 lane closes across the 25 days from 18 August to the day it was
@@ -78,8 +80,38 @@ PANDORAS_ROOT=/tmp/pandoras-demo node src/bin/router.mjs alloc
 One card now says FIRE NOW and the other says QUEUED, naming the lane it waits on and the three
 paths where the two scopes intersect. That refusal is the whole product.
 
-`node src/bin/router.mjs` with no arguments lists the subcommands: `alloc`, `open`, `close`,
-`land`, `claim`, `apply`. `alloc` writes no record; it only produces cards.
+Before firing anything, ask whether the workspace itself is sound:
+
+```
+PANDORAS_ROOT=/tmp/pandoras-demo node src/bin/router.mjs check
+```
+
+It reads `POLICY.md`, `PREFIXES.md`, `CLAIMS.md` and `LANES.md` the same way every other subcommand
+does, and every bridge filename against the vocabulary, then prints one line per problem grouped by
+file and a final count. Against the demo workspace above it prints `OK` and exits 0. It reads and
+never writes — no ledger record, no claim, nothing on disk changes — and it exits non-zero the
+moment there is anything to fix, so `check && alloc` is a safe chain.
+
+Ask the same workspace what is going on in it right now, before firing anything:
+
+```
+PANDORAS_ROOT=/tmp/pandoras-demo node src/bin/router.mjs board
+```
+
+Four labelled sections, oldest and most informative first: **active claims** (who holds what, each
+one flagged when it has aged past the adjudication threshold or when one lane holds two claims on
+one repo), **open lanes** (every OPEN record with no CLOSE beside it, oldest first, because age is
+the signal), **recent closes** (everything that finished in the last 48 hours, marked when the same
+lane closed more than once — a sign its brief was never renamed and fired again), and **orphaned
+lanes** (an open lane whose worktree or branch is gone, whose report already landed, whose record
+outlived the active window with no CLOSE, or that holds no claim at all while still reading OPEN).
+An empty section prints one sentence saying so — a quiet board, not a proven-clean one. `board`
+reads CLAIMS.md, LANES.md, the bridge and, for each open lane, the filesystem and git; it writes
+nothing, the same as `alloc`.
+
+`node src/bin/router.mjs` with no arguments lists the subcommands: `board`, `alloc`, `open`,
+`close`, `land`, `claim`, `apply`, `check`. `alloc` and `board` write no record; they only produce
+cards or reports, and `check` writes nothing at all.
 
 ## The two ideas
 
@@ -143,7 +175,7 @@ releases the lane's claim.
 
 ### The liveness gate, and skip is not a pass
 
-`live` is the gate none of those fourteen runs. Every other check asks a question about the
+`live` is the gate none of the tools in [docs/PRIOR-ART.md](docs/PRIOR-ART.md) runs. Every other check asks a question about the
 repository, and all of them can be true while the page a person opens is last week's build. So the
 close sends a GET and reads what came back.
 
@@ -213,6 +245,9 @@ Read further:
 - [Gate matrix](docs/gates.json): every gate, the ledger column it writes, the values it can write,
   what it proves and what it does not. `test/gate-matrix-test.mjs` keeps it honest.
 - [How the liveness gate reads a response](docs/LIVENESS.md)
+- [Which modules track the private tree this was extracted from, and which are forked on
+  purpose](docs/adr/0001-shared-and-forked-modules.md). `npm run shared:check` compares the four
+  that are meant to match and names any that differ; it reports, it never copies.
 - [Prior art](docs/PRIOR-ART.md)
 
 ## Prior art, and how this differs
@@ -241,27 +276,55 @@ reading for its own sake. This project keeps an append-only ledger instead, beca
 lane's declared scope and its open timestamp recorded at the moment of dispatch, which no PR or CI
 fact carries.
 
-Of the fourteen tools compared, none did both scope-before-dispatch and
-verify-after, and none checked that a merged change is actually live at a URL. That gap, rather
-than either half on its own, is what this fills.
+Of the three entries written up in [docs/PRIOR-ART.md](docs/PRIOR-ART.md) — those two tools and the
+isolation-only class — none did both scope-before-dispatch and verify-after, and none checked that
+a merged change is actually live at a URL. That gap, rather than either half on its own, is what
+this fills. Three is what is written down and shown; it is not a survey of the field, and a fourth
+entry that does both halves would be worth a row and worth knowing about.
 
 ## Install
 
 Node 22 or newer, per the `engines` field. Verified here on Node 25.9.0.
 
-Zero npm dependencies: Node builtins and `git`. No build step, no lockfile to audit, nothing to
-install before `npm test` runs. The type check at the end of `npm test` fetches TypeScript through
-npx on its first run, so that one step needs the network once.
+**What the tool itself depends on, and what you are trusting when you install it.** At run time:
+nothing but Node's own built-in modules and the `git` already on your machine. The `dependencies`
+field is empty and there is no build step, so nothing third-party executes when the router runs.
+
+Two dev-only packages exist, and they are there for one job — the type check at the end of
+`npm test`. Both are pinned to an exact version, never a range:
+
+| package | version | what it is for |
+|---|---|---|
+| `typescript` | 6.0.3 | the compiler that checks the JSDoc against the code |
+| `@types/node` | 22.20.2 | Node's own type declarations, so `fs` and `path` are known |
+
+`package-lock.json` is committed, so those two and their one transitive package (`undici-types`)
+are recorded with the exact tarball URL and integrity hash that were reviewed. `npm ci` installs
+that file and nothing else, and fails outright if the manifest and the lockfile disagree.
+`--ignore-scripts` means no package's install hooks run. Both flags are what CI uses, on every
+one of the six matrix cells.
 
 ```
 git clone https://github.com/hoplight-ai/pandoras-router
 cd pandoras-router
+npm ci --ignore-scripts
 npm test
 ```
 
-The package declares a `pandoras-router` binary pointing at `src/bin/router.mjs`, so an install or
-a link puts that name on your path. Running `node src/bin/router.mjs <subcommand>` from the repo
-is equivalent and needs no install at all.
+The install is the only step that touches the network. If you would rather not run it, `node
+test/run.mjs` runs the whole assertion suite on its own with nothing installed; only the type
+check needs the compiler.
+
+**Nothing is published to npm.** `npm install pandoras-router` fetches nothing today: no release
+has been tagged and no package has been pushed to the registry, so the name in `package.json` is a
+placeholder for a release that has not been cut. The repository above is the only place this
+installs from.
+
+So run it out of the clone. `node src/bin/router.mjs <subcommand>` works with nothing installed at
+all, and is how every example in this README is run. The package does declare a `pandoras-router`
+binary pointing at that file, so `npm link` inside the clone, or an install straight from the git
+URL, puts that name on your path — both take the code from this repository, not from the registry.
+When a release is cut, this section will say so and name the version.
 
 Every driver resolves the workspace root, the directory holding `_handoffs/` and your repos, from
 `$PANDORAS_ROOT`, falling back to the current directory. The package's own install location is
@@ -274,7 +337,7 @@ prose read by people. Copy them from `examples/` and edit:
 
 | file | what it holds |
 |---|---|
-| `POLICY.md` | one row per repo: writer cap, deploy style, how a deploy is proved, the liveness URL, the build command when npm is not the builder, exclusive paths, the `.env.local` key allowlist, traps |
+| `POLICY.md` | one row per repo: writer cap, deploy style, how a deploy is proved, the liveness URL, the build command when npm is not the builder, exclusive paths, traps. Its `env` table names the `.env.local` keys a new worktree may receive; a repo with no row there receives none |
 | `PREFIXES.md` | the filename vocabulary. An unrecognized lifecycle word routes nothing and is named on stdout, rather than defaulting to live |
 | `CLAIMS.md` | the visible lock, one line per active lane. Ships empty |
 | `LANES.md` | the append-only ledger of every lane opened, landed and closed. Ships empty |
@@ -301,13 +364,16 @@ Three more things are configuration rather than code, and each ships empty or ne
 Read this before wiring anything in. None of it is hidden in the code, and none of it should be a
 surprise on the day it matters.
 
-- **`open` copies the repo's `.env.local` into every worktree it creates**, mode 600, never
-  overwriting one that is already there. It copies the whole file, unless the repo has a row in
-  the policy's `env` table naming an allowlist; then only those keys are copied, and a listed key
-  the file lacks is reported missing by name rather than written empty. A fresh checkout has no
-  credential otherwise and a lane fails cold on its first job. The cost is that a credential file,
-  or the allowed slice of one, now exists once per checkout; removing a worktree by hand leaves its
-  copy behind unless you delete it too.
+- **`open` copies a credential into a new worktree only when the policy names the keys, and
+  copies nothing otherwise.** A repo with no row in the policy's `env` table gets no `.env.local`
+  at all, and `open` says so in one line naming the row to add. With a row, exactly those keys are
+  copied and nothing else: comments and unlisted keys are dropped, and a listed key the file lacks
+  is reported missing by name rather than written empty. The copy is created at mode 600 — created
+  private, not made private a moment later — and an existing `.env.local` in the worktree is never
+  overwritten. The cost of switching it on is that the allowed slice of a credential file then
+  exists once per checkout; removing a worktree by hand leaves that slice behind unless you delete
+  it too. The cost of leaving it off is that a lane whose first job needs a credential fails until
+  you add the row.
 - **The state directory carries a lock file, `_handoffs/_lanes/.lock`.** Every write to
   `CLAIMS.md` and `LANES.md` happens while one process holds it, and `open` re-checks the board
   under it, so two dispatchers opening overlapping lanes at the same moment get one open and one
@@ -372,6 +438,61 @@ surprise on the day it matters.
   and prints no transcript file name, project name or prompt text.
 - All three guards append one line per refusal to `hooks/guard-log.jsonl` (gitignored) when the
   harness supplies a session id, and nothing on a pass.
+
+### Switching the three guards on
+
+Nothing in `hooks/` runs on its own. Each is a `PreToolUse` hook: the harness hands it one JSON
+object on stdin describing the call it is about to make, and the hook answers allow or deny. They
+are wired in your agent harness's settings file — `.claude/settings.json` inside a project, or
+`~/.claude/settings.json` to cover every project. Paste this into it, replacing `<path-to-this-repo>`
+with wherever this repository sits on your machine (inside a project that *is* this repository,
+`$CLAUDE_PROJECT_DIR` works and needs no editing):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "node \"<path-to-this-repo>/hooks/guard-irreversible.mjs\"" }]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [{ "type": "command", "command": "node \"<path-to-this-repo>/hooks/guard-report-overwrite.mjs\"" }]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [{ "type": "command", "command": "node \"<path-to-this-repo>/hooks/guard-wide-read.mjs\"" }]
+      }
+    ]
+  }
+}
+```
+
+Three notes on the matchers, because each one is a choice rather than an obvious default:
+
+- **The irreversible-action guard reads SQL as well as shell.** The `Bash` matcher above covers the
+  command line. If your harness also reaches a database through a tool of its own, add a second
+  entry whose matcher is that tool's name — the guard looks for `execute_sql` and `apply_migration`
+  in the name it is given and reads the statement out of the call's `query` field. A database tool
+  you do not list is a database tool this guard never sees.
+- **`Write`, not `Write|Edit`, for the report guard.** It exists to stop a whole-file replace
+  landing on top of an existing report; a targeted edit to your own report is the thing it tells
+  you to do instead, so matching `Edit` would refuse the fix along with the mistake.
+- **`Read` alone for the wide-read gate**, which refuses only a whole-file read of a large text
+  file and always allows a read that names a range.
+
+Then set `PANDORAS_UNLOCK_PHRASE` in your environment to a phrase of your own, or the
+irreversible-action guard has no unlock at all and refuses every gated command. That is a safe
+state, not a broken one, but it is not the state most people want.
+
+## Contributing, and reporting a security problem
+
+[CONTRIBUTING.md](CONTRIBUTING.md) covers how to run the suite, what a pull request needs, and the
+rule that every reported bug gets a failing test before it gets a fix.
+
+Found a vulnerability? Please do not open an issue. [SECURITY.md](SECURITY.md) has the address, the
+seven-day reply window, and which versions are covered.
 
 ## License
 

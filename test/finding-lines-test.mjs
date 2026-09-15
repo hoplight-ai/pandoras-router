@@ -75,6 +75,33 @@ T('parseFindingLines splits complete from incomplete across a whole report', () 
   assert.deepEqual(incomplete[0].missing, ['owner']);
 });
 
+// ONLY AN UPPER-CASE FINDING LINE IS A FINDING. The pattern once carried an `i` flag, so ordinary
+// wrapped prose that happened to begin a line with the word "finding:" was read as a FINDING line
+// with no fix, no size and no owner — and the gate refused the close over a sentence that was never
+// a finding at all. Observed twice in one day on the sibling tree this module came from. The
+// documented format, in this module's own header, is upper-case only.
+T('RED-PROOF wrapped lower-case prose beginning "finding:" is not a FINDING line', () => {
+  const text = [
+    'STATUS: PARTIAL',
+    'finding: if the pool-size override is ever set to something that is not a number, the ceiling',
+    'would silently stop applying and every request would go through uncapped.',
+    'FINDING: the retry loop has no backoff | fix: add exponential backoff | size: small | owner: ops',
+  ].join('\n');
+  const { complete, incomplete } = parseFindingLines(text);
+  assert.equal(incomplete.length, 0, 'prose that merely starts with the word must not be graded as a finding');
+  assert.equal(complete.length, 1);
+});
+
+T('RED-PROOF a mixed-case marker is not a FINDING line either', () => {
+  assert.equal(parseFindingLine('Finding: the cache is cold on a first request'), null);
+  assert.equal(parseFindingLine('- finding: the cache is cold on a first request'), null);
+});
+
+T('the upper-case marker still parses with a leading bullet and leading whitespace', () => {
+  assert.equal(parseFindingLine('  FINDING: x | fix: y | size: small | owner: ops').ok, true);
+  assert.equal(parseFindingLine('* FINDING: x | fix: y | size: small | owner: ops').ok, true);
+});
+
 T('findingsGateVerdict is n/a with no report text yet', () => {
   assert.equal(findingsGateVerdict(null).value, 'n/a');
 });

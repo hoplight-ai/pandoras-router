@@ -48,7 +48,13 @@ export function isOwnerToken(value) {
   return v.toLowerCase() === OWNER_TOKEN.toLowerCase();
 }
 
-const FINDING_RE = /^\s*(?:[-*]\s*)?FINDING:\s*(.*)$/i;
+// ONLY AN UPPER-CASE MARKER IS A FINDING. This pattern once carried an `i` flag, and the cost was
+// the opposite of the one it was meant to avoid: ordinary prose that wrapped onto a line beginning
+// "finding: if the pool-size override is ever set..." was read as a FINDING line carrying no fix,
+// no size and no owner, so the gate refused a close over a sentence nobody meant as a finding. The
+// documented format, in this module's own header, is upper-case `FINDING:`. A marker a writer has
+// to type deliberately is the point: it is what separates a raised problem from a paragraph.
+const FINDING_RE = /^\s*(?:[-*]\s*)?FINDING:\s*(.*)$/;
 const SIZES = ['small', 'medium', 'large'];
 
 /**

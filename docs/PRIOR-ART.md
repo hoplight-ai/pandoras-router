@@ -12,10 +12,17 @@ copies where the collision surfaces at merge.
 | [Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) | no | recomputed from pull-request and CI facts on every ask | no | Never stores a status at all, so a stored status can never go stale against reality. A cleaner idea than a ledger, worth reading for its own sake. This project keeps an append-only ledger because it needs a lane's declared scope and its open timestamp recorded at the moment of dispatch, which no PR or CI fact carries. |
 | isolation-only tools (a worktree or container per agent) | no | no | no | A real fix for a real problem. They do not address two agents editing one file in two copies. |
 
-Of the fourteen tools compared before publishing, none did both scope-before-dispatch and
-verify-after, and none checked that a merged change is actually live at a URL. That gap, rather
-than either half on its own, is what this project fills. An earlier draft said 13 in one place; the
-comparison record says fourteen, and the README and this note now agree.
+Of the three entries above, none did both scope-before-dispatch and verify-after, and none checked
+that a merged change is actually live at a URL. That gap, rather than either half on its own, is
+what this project fills.
+
+**Three is what this table shows, and the number was corrected down to it on 2026-09-15.** The
+README and this note both used to say that fourteen tools had been compared before publishing.
+Nothing recording those fourteen could be found: the research store that files this kind of
+comparison run holds 777 rows and none of them is that comparison. A claim about a survey nobody
+can produce is worth less than a short table somebody can check, so the count now matches the rows.
+If the record of the wider comparison turns up, the rows belong here rather than the number
+belonging back in the sentence.
 
 ## A row not added: Clash
 

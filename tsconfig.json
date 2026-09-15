@@ -1,11 +1,11 @@
 // tsconfig.json — the type checker reads the JSDoc already in the source. Nothing is compiled.
 //
-// The trade: zero runtime dependencies and zero install dependencies are kept. The package.json
-// dependency fields stay empty and no lockfile is committed. One tool, the TypeScript compiler, is
-// fetched on demand by `npm run typecheck` through npx at an exact pinned version, together with
-// Node's type declarations at an exact pinned version, so the first run downloads them once and
-// every later run reads them from the npx cache. test/typecheck.mjs points the compiler at that
-// cache; an editor with no Node types installed will show Node globals as unknown, and the npm
+// The trade: zero RUNTIME dependencies are kept, and the two tools this check needs are vendored
+// rather than fetched. `dependencies` stays empty; the TypeScript compiler and Node's type
+// declarations sit in `devDependencies` at exact pinned versions, recorded with their integrity
+// hashes in the committed package-lock.json, and are installed by `npm ci --ignore-scripts`.
+// test/typecheck.mjs points the compiler at that install, so `npm test` fetches nothing at run
+// time. An editor with no Node types installed will show Node globals as unknown, and the npm
 // script is the check of record.
 //
 // The source stays plain JavaScript (.mjs). `checkJs` holds every JSDoc `@param`, `@returns` and

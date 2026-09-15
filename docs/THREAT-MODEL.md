@@ -9,7 +9,7 @@ Short on purpose. Every claim below points at a file a reviewer can open.
 |---|---|---|
 | The dispatcher's machine | Every check runs here: the git reads, the build, the HTTP probe, the ledger writes. A compromised machine defeats every gate at once, and nothing in this repository is designed to survive that. | `src/bin/close.mjs` runs `npm run build` in the lane's checkout; `src/lib/lanes.mjs` appends to a plain file |
 | The operator | The unlock phrase is a person typing a phrase. The tool asks a human to confirm an irreversible action; it does not verify who the human is. | `hooks/guard-irreversible.mjs`, top comment |
-| The policy files | `POLICY.md`, `PREFIXES.md`, `CLAIMS.md` and `LANES.md` are read as fact. A liveness row can name a URL and an environment variable, so the one defence against a hostile row is the rule that a probe only reads a variable whose name starts with `PANDORAS_`. | `src/lib/liveness.mjs`, section "Where a credential may go" |
+| The policy files | `POLICY.md`, `PREFIXES.md`, `CLAIMS.md` and `LANES.md` are read as fact. A liveness row can name a URL and an environment variable, and a repos row can name a build command the close will run, so two rules stand in for trust: a probe only reads a variable whose name starts with `PANDORAS_`, and a build value is an argument array resolved on PATH (see "The build column" below). | `src/lib/liveness.mjs`, section "Where a credential may go"; `parseBuild` in `src/lib/policy.mjs` |
 
 ## Untrusted
 
@@ -72,9 +72,11 @@ whole mechanism. Pick one that is not ordinary English so it cannot appear by ac
 
 Both are under "What this touches on your machine" in the README, and both are deliberate.
 
-1. **`open` copies the repo's `.env.local` into every worktree it creates**, mode 600, never
-   overwriting one already there. A credential file then exists once per checkout, and removing a
-   worktree by hand leaves its copy behind.
+1. **`open` copies a credential into a new worktree only when the policy's `env` table names the
+   keys**, and copies nothing for a repo with no row there. The copy holds exactly those keys, is
+   created at mode 600 rather than created and then made private, and never overwrites an
+   `.env.local` already in the worktree. Where a row exists, that slice of a credential file then
+   exists once per checkout, and removing a worktree by hand leaves the slice behind.
 2. **`close` runs the branch's own build on the dispatcher's machine**, in the lane's checkout.
    That is what a build gate is, and it means a lane's `package.json` runs code where the close runs.
    The run is bounded, not contained (`src/lib/build.mjs`): no shell on any OS. npm is resolved to
@@ -97,3 +99,35 @@ Both are under "What this touches on your machine" in the README, and both are d
 
 The README's section on what this touches describes the guards as they are now: Node only, failing
 closed on input they cannot read, and an unlock phrase with no default.
+
+## The build column: the close runs a command a policy row names
+
+Since 2026-09-15 the policy's repos table has a `build` column, so a repository npm cannot build
+gets a real build gate instead of a skip. Say the consequence plainly: **the close now runs a command
+that comes from a configuration file rather than from a constant in the code.** Three rules are the
+whole distance between that file and arbitrary execution on the dispatcher's machine, and all three
+are in `parseBuild` (`src/lib/policy.mjs`) and `resolveOnPath` (`src/lib/build.mjs`):
+
+1. **The value is an argument array, never a command line.** The command and its arguments,
+   separated by spaces, spawned with `shell: false`. Nothing re-parses it, so quoting, globbing and
+   substitution never happen.
+2. **Shell metacharacters are refused when the policy file loads.** `|`, `&`, `;`, `<`, `>`, `$`, a
+   backtick and a newline each refuse by name, before the close starts anything. A value containing
+   one was written by somebody expecting a shell, and the honest answer to that expectation is a
+   refusal that says so rather than a literal argument that silently does nothing.
+3. **The command is resolved on PATH and nowhere else.** The first token must be a bare command name
+   (no path separator, no `~`), and only absolute PATH entries are searched, because a relative one
+   resolves against the build's working directory, which is the repository being built. Nothing
+   inside the checkout is ever consulted, and the spawn is handed the absolute path the lookup
+   returned, which also closes the Windows search order where a bare name finds the current directory
+   before PATH. On Windows only `.exe` and `.com` are run; a command that exists only as `.cmd`,
+   `.bat` or `.ps1` is a `skip` naming the file, because starting it would need a shell.
+
+What this does NOT defend against is the same thing the npm build never defended against: the
+declared command can do anything the dispatcher can do while it runs. There is no container, no
+separate user and no network cut. The limits are the same ones the npm path has: a 15-minute
+default overridable only by `PANDORAS_BUILD_TIMEOUT_MS` in the dispatcher's own environment, the
+process-group kill on macOS and Linux and the `taskkill /T /F` tree kill on Windows, and the last
+64 KB of output. **None of those may be set from the policy file**; a per-repository time limit was
+deliberately left out, because a repository that can lengthen its own limit has reopened the hole.
+The rule the README gives still governs: do not close a branch you would not build.

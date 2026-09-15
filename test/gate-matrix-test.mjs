@@ -355,6 +355,31 @@ T('docs: no em dash in any of the prose documents', () => {
   }
 });
 
+T('RED-PROOF green: the README and the threat model state the three rules that hold a declared build command apart from arbitrary execution', () => {
+  // BUILDCMD1, 2026-09-15. The close now runs a command a repository's own policy row names. The
+  // argument-array rule, the PATH-only resolution and the refusal of shell metacharacters are what
+  // stand between a configuration file and arbitrary execution on the dispatcher's machine, so a
+  // document that stops saying so is a document that lies about what the tool does.
+  const readme = read('README.md');
+  const threat = read('docs/THREAT-MODEL.md');
+  for (const [where, text] of [['README.md', readme], ['docs/THREAT-MODEL.md', threat]]) {
+    assert.match(text, /argument array/, `${where} does not state that the build column is an argument array`);
+    assert.match(text, /never a command line|not a command line/, `${where} does not state that the build column is never a command line`);
+    assert.match(text, /PATH and nowhere else|on PATH and nowhere else/, `${where} does not state that a declared command resolves on PATH only`);
+    for (const ch of ['`|`', '`&`', '`;`', '`<`', '`>`', '`$`', 'backtick', 'newline']) {
+      assert.ok(text.includes(ch), `${where} does not name ${ch} among the characters the build column refuses`);
+    }
+  }
+  // The limit stays the dispatcher's, and the threat model says why that was not made configurable.
+  assert.match(threat, /None of those may be set from the policy file/, 'the threat model no longer says the limits cannot come from the policy file');
+  assert.match(threat, /per-repository time limit was\s+deliberately left out/, 'the threat model no longer says why a per-repository time limit was left out');
+  // The parser and the lookup are named, so a reader can open the two files that enforce the rules.
+  for (const fn of ['parseBuild', 'resolveOnPath']) {
+    assert.ok(threat.includes(fn), `docs/THREAT-MODEL.md does not name ${fn}, which enforces a rule it states`);
+  }
+  assert.match(readme, /npm is never a fallback/, 'the README does not say npm never stands in for a declared command that is missing');
+});
+
 // ── run ───────────────────────────────────────────────────────────────────────────────────────
 
 let pass = 0;

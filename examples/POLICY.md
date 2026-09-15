@@ -39,6 +39,9 @@ by path comparison (`src/lib/scope.mjs`), never by judgment.
 `deploy` is one of `push` (pushing main deploys), `push+fns` (functions ship by a separate command
 first, then push), `cli` (push deploys nothing; a command does), `none`.
 
+`build` is OPTIONAL, and a table with no `build` column at all is read exactly as it was before the
+column existed: every repo is built with npm. It is described under `verify` below.
+
 `verify` is how a close proves the deploy, and the close runs exactly the form named here, never
 another one in its place:
 
@@ -58,14 +61,28 @@ probe. The sha and header forms take auth and timeout from the repo's `liveness`
 else refuses to load and names the repo and the value — the same rule the liveness table's own url
 has always been held to.
 
+`build` is how this repository is built, for a repository that npm cannot build. **A value is an
+argument array, never a command line:** the command and its arguments separated by spaces, handed
+to the operating system as a list and never to a shell. So `pnpm build`, `yarn build`,
+`bun run build`, `cargo build --release`, `go build ./...` and `make build` all work, and a pipeline,
+a redirect, a variable or a second command does not — the column refuses `|`, `&`, `;`, `<`, `>`,
+`$`, a backtick and a newline at load, by name, before any close starts anything. The first token
+must be a bare command name, looked up on PATH and nowhere else, so a repository cannot point its
+own gate at a file it ships. `-` means "build this with npm", which is the behaviour every repo had
+before this column existed; a blank cell is refused, because a blank is an unfinished row rather
+than a decision.
+
+The time limit, the kill and the output cap are the dispatcher's, not the repository's, and nothing
+in this file can change them. See "What this touches on your machine" in the README.
+
 <!-- table: repos -->
 
-| repo | tier | writers | dispatch | port | deploy | verify | url |
-|---|---|---|---|---|---|---|---|
-| `web` | 1 | 3 | product | 5173 | push | `sha:/api/status:release` | https://web.example.com |
-| `api` | 1 | 2 | product | 5174 | push+fns | `string` | https://api.example.com |
-| `repo-a` | 2 | 1 | infra | 5175 | cli | `string` | https://repo-a.example.com |
-| `docs` | 3 | 1 | infra | - | push | `none` | - |
+| repo | tier | writers | dispatch | port | deploy | verify | url | build |
+|---|---|---|---|---|---|---|---|---|
+| `web` | 1 | 3 | product | 5173 | push | `sha:/api/status:release` | https://web.example.com | - |
+| `api` | 1 | 2 | product | 5174 | push+fns | `string` | https://api.example.com | - |
+| `repo-a` | 2 | 1 | infra | 5175 | cli | `string` | https://repo-a.example.com | `cargo build --release` |
+| `docs` | 3 | 1 | infra | - | push | `none` | - | - |
 
 ## Liveness — the probe that proves a merged change is actually serving
 

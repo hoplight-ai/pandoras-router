@@ -16,6 +16,15 @@
 // `<node dir>/../lib/node_modules/npm/bin/npm-cli.js`); else, on POSIX only, the bare `npm` command
 // looked up on PATH. When nothing resolves the gate is `skip` with every path tried named.
 //
+// A PROJECT THAT IS NOT NPM (BUILDCMD1, 2026-09-15). A repository whose policy row declares a
+// `build` command runs that instead, and under exactly the same limits. The declaration is an
+// argument array — `pnpm build`, `cargo build --release`, `go build ./...` — validated at policy
+// parse time (parseBuild in lib/policy.mjs) and never re-parsed here, so nothing a repository writes
+// reaches a shell. The command is resolved on PATH and nowhere else, so a repository cannot ship the
+// executable its own gate runs; a command not on PATH is a skip naming it. The time limit, the kill
+// and the output cap all come from this file and the dispatcher's environment: a repository cannot
+// lengthen its own limit, which is the hole this route is careful not to open.
+//
 // A BUILD THAT NEVER FINISHED IS NOT GREEN. A timeout is `no`, and so is a build killed by any
 // signal. A build that could not start at all, because npm cannot be found or cannot be executed, is
 // `skip`: nothing was measured, and a skip is not a pass. Only an exit code of 0, inside the limit,
@@ -56,6 +65,81 @@ export function formatMs(ms) {
 
 /** @param {string} p */
 const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
+
+/** @param {string} p */
+const isExecutableFile = (p) => {
+  try {
+    if (!fs.statSync(p).isFile()) return false;
+    fs.accessSync(p, fs.constants.X_OK);
+    return true;
+  } catch { return false; }
+};
+
+// ── A DECLARED BUILD COMMAND, RESOLVED ON PATH AND NOWHERE ELSE (BUILDCMD1, 2026-09-15) ──────────
+//
+// The policy's `build` column names a repository built by something other than npm. The close then
+// runs a command a repository's own policy row named, which is the widest this gate has ever been,
+// so the lookup is deliberately narrow:
+//
+//   * ONLY ABSOLUTE PATH ENTRIES ARE SEARCHED. A relative entry — `.`, an empty entry, `tools/bin` —
+//     resolves against the process's working directory, and the build's working directory IS the
+//     repository being built. A repository could then ship the executable its own gate runs.
+//   * NOTHING INSIDE THE CHECKOUT IS EVER CONSULTED. Not `node_modules/.bin`, not the checkout root.
+//     The spawn is given the ABSOLUTE path this lookup returned, which also closes the Windows
+//     CreateProcess search order, where a bare name finds the application and current directories
+//     before PATH.
+//   * ON WINDOWS ONLY `.exe` AND `.com` COUNT. `.cmd`, `.bat` and `.ps1` are batch files Node will
+//     not start without a shell (the 2024 batch-file argument fix), and a shell would reopen the
+//     argument re-parsing this whole design removes. A command that exists only as one of those is
+//     NOT run: the gate is a skip that names the file it found and why it would not start it.
+//
+// A command that resolves to nothing is a skip naming it. A skip is not a pass.
+export const WINDOWS_SPAWNABLE_EXT = ['.exe', '.com'];
+export const WINDOWS_SHELL_ONLY_EXT = ['.cmd', '.bat', '.ps1'];
+
+/**
+ * @typedef {{command:string|null, tried:string[], shellOnly:string|null, searched:number}} PathResolution
+ */
+
+/**
+ * Find a bare command name on PATH. Reads the file system only to ask whether a candidate exists and
+ * can be executed.
+ *
+ * @param {string} name                                 a bare command name; a path is refused at policy parse time
+ * @param {object} [o]
+ * @param {Record<string, string|undefined>} [o.env]    where PATH is read from
+ * @param {string} [o.platform]                         process.platform, or another to plan for
+ * @param {(p: string) => boolean} [o.exists]           whether a path is an existing executable file
+ * @returns {PathResolution}
+ */
+export function resolveOnPath(name, { env = process.env, platform = process.platform, exists = isExecutableFile } = {}) {
+  const win = platform === 'win32';
+  const P = win ? nodePath.win32 : nodePath.posix;
+  const raw = env?.PATH ?? env?.Path ?? env?.path ?? '';
+  const dirs = String(raw)
+    .split(win ? ';' : ':')
+    .map((d) => d.trim().replace(/^"(.*)"$/, '$1'))
+    .filter((d) => d && P.isAbsolute(d));
+  /** @type {string[]} */
+  const tried = [];
+  /** @type {string|null} */
+  let shellOnly = null;
+  const hasExt = win && /\.[a-z0-9]+$/i.test(name);
+  for (const dir of dirs) {
+    for (const ext of win && !hasExt ? WINDOWS_SPAWNABLE_EXT : ['']) {
+      const candidate = P.join(dir, name + ext);
+      tried.push(candidate);
+      if (exists(candidate)) return { command: candidate, tried, shellOnly: null, searched: dirs.length };
+    }
+    if (win && !hasExt && !shellOnly) {
+      for (const ext of WINDOWS_SHELL_ONLY_EXT) {
+        const candidate = P.join(dir, name + ext);
+        if (exists(candidate)) { shellOnly = candidate; break; }
+      }
+    }
+  }
+  return { command: null, tried, shellOnly, searched: dirs.length };
+}
 
 /**
  * @typedef {{command:string|null, args:string[], via:'npm_execpath'|'beside-node'|'path'|null, cli:string|null, tried:string[]}} NpmResolution
@@ -109,18 +193,45 @@ export function resolveNpm({ env = process.env, execPath = process.execPath, pla
  * that resolves to nothing runnable without a shell: skip, with the paths tried. Otherwise the plan
  * names the command, the directory and the limits, and runBuild runs exactly that.
  *
+ * A DECLARED COMMAND TAKES A DIFFERENT ROUTE, and deliberately a shorter one. `build` is the repo's
+ * policy row, already parsed and validated by parseBuild in lib/policy.mjs: a bare command name and
+ * its arguments, no shell metacharacter anywhere. The npm preconditions do not apply to it — a Rust
+ * or Go repository has neither a `build` script nor a node_modules — so the only question is whether
+ * the command is on PATH. It is resolved there and NOWHERE ELSE (resolveOnPath above); a command
+ * that is not found is a skip naming it, never a pass. Everything after the plan is identical: the
+ * same spawn with no shell, the same limits read from this file and this process's environment, the
+ * same kill, the same output cap, the same verdicts.
+ *
  * @param {object} o
  * @param {string} o.checkout                  the lane's own checkout, where the build must run
  * @param {any} o.pkg                          the checkout's parsed package.json, or null when absent or unreadable
  * @param {boolean} [o.nodeModules]            whether the checkout has node_modules; omitted means not checked
+ * @param {{command:string, args:string[], label:string}|null} [o.build]  the repo's declared build command, or null for npm
  * @param {Record<string, string|undefined>} [o.env]  where PANDORAS_BUILD_TIMEOUT_MS and npm_execpath are read from
  * @param {(o: {env: Record<string, string|undefined>}) => NpmResolution} [o.resolve]  the npm resolver; resolveNpm by default
+ * @param {(name: string, o: {env: Record<string, string|undefined>}) => PathResolution} [o.lookup]  the PATH lookup; resolveOnPath by default
  * @returns {{verdict:'n/a'|'skip'|null, why:string, command:string|null, args:string[], label:string, npm:NpmResolution|null, cwd:string, timeoutMs:number, maxOutputBytes:number}}
  */
-export function buildPlan({ checkout, pkg, nodeModules, env = {}, resolve = resolveNpm }) {
+export function buildPlan({ checkout, pkg, nodeModules, build = null, env = {}, resolve = resolveNpm, lookup = resolveOnPath }) {
   const limit = buildTimeoutFrom(env);
   /** @type {{verdict:'n/a'|'skip'|null, why:string, command:string|null, args:string[], label:string, npm:NpmResolution|null, cwd:string, timeoutMs:number, maxOutputBytes:number}} */
   const plan = { verdict: null, why: '', command: null, args: [], label: 'npm run build', npm: null, cwd: checkout, timeoutMs: limit.timeoutMs, maxOutputBytes: BUILD_MAX_OUTPUT_BYTES };
+
+  // THE LIMITS ARE THE DISPATCHER'S. Only `command`, `args` and `label` are read off the declaration,
+  // one field at a time, so a policy file that grows a `timeoutMs` of its own reaches nothing here.
+  if (build) {
+    const label = build.label || [build.command, ...build.args].join(' ');
+    const declared = { ...plan, label, npm: null };
+    const found = lookup(build.command, { env });
+    if (!found.command) {
+      const batch = found.shellOnly
+        ? ` The only match was ${found.shellOnly}, a batch file this Node cannot start without a shell, and a shell would reopen the argument re-parsing this gate exists to avoid.`
+        : '';
+      return { ...declared, verdict: 'skip', why: `SKIP: the declared build command \`${build.command}\` was not found on PATH (${found.searched} absolute PATH entr${found.searched === 1 ? 'y' : 'ies'} searched), so \`${label}\` never started in ${checkout}. A declared command is looked up on PATH only, never inside the repository being built.${batch} Nothing was measured, and a skip is not a pass.` };
+    }
+    return { ...declared, command: found.command, args: [...build.args], why: `${label} (${found.command}, declared in the policy file) in ${checkout}, limit ${formatMs(limit.timeoutMs)}, last ${plan.maxOutputBytes} bytes of output kept${limit.note ? `; ${limit.note}` : ''}` };
+  }
+
   const script = pkg && typeof pkg === 'object' ? pkg.scripts?.build : null;
   if (!script) {
     return { ...plan, verdict: 'n/a', why: `${checkout} has no \`build\` script, so there is no build to run. Recorded as N/A, not as a skip: nothing was left unmeasured.` };

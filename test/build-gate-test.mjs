@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -68,16 +69,20 @@ const baseEnv = () => {
 // `stale: true` lands a neighbour's commit on main after the branch was cut.
 const g = (dir, args) => execFileSync('git', ['-C', dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', '-c', 'commit.gpgsign=false', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
+/** The `web` row this suite's workspaces carry: no live probe, and npm as the build. */
+const WEB_ROW = '| `web` | 1 | 3 | product | 5173 | push | `none` | https://web.example.com | - |';
+
 function makeWorkspace({ stale = false } = {}) {
   const ws = real(fs.mkdtempSync(path.join(os.tmpdir(), 'pandoras-build-')));
   const lanes = path.join(ws, '_handoffs', '_lanes');
   fs.mkdirSync(lanes, { recursive: true });
   for (const f of ['PREFIXES.md', 'CLAIMS.md', 'LANES.md']) fs.copyFileSync(path.join(EXAMPLES, f), path.join(lanes, f));
-  const row = '| `web` | 1 | 3 | product | 5173 | push | `sha:/api/status:release` | https://web.example.com |';
+  const row = '| `web` | 1 | 3 | product | 5173 | push | `sha:/api/status:release` | https://web.example.com | - |';
   const src = fs.readFileSync(path.join(EXAMPLES, 'POLICY.md'), 'utf8');
   assert.ok(src.includes(row), 'premise: the example policy row for web is still spelled as this suite expects');
   // verify `none`: the live gate sends no request, so this suite never reaches the network.
-  fs.writeFileSync(path.join(lanes, 'POLICY.md'), src.replace(row, '| `web` | 1 | 3 | product | 5173 | push | `none` | https://web.example.com |'));
+  // build `-`: npm, which is what every assertion outside the declared-command section measures.
+  fs.writeFileSync(path.join(lanes, 'POLICY.md'), src.replace(row, WEB_ROW));
 
   const web = path.join(ws, 'web');
   fs.mkdirSync(web);
@@ -317,13 +322,93 @@ T('fresh base: the same branch after merging main grades on its build', async ()
   });
 });
 
+// ---------------------------------------------------------------- the close, on a declared command
+//
+// BUILDCMD1, 2026-09-15. The two assertions a reader of a close depends on: the gate's line names
+// the command that actually ran, so an npm build and a declared one are told apart without opening
+// the policy file; and a policy value attempting a shell pipeline is refused before the close starts
+// anything at all.
+
+/**
+ * A workspace whose policy declares a build command for `web`. `value` is the policy cell, built
+ * from the workspace when it needs a path out of it. Only the `web` row's build cell changes.
+ * @param {string | ((w: ReturnType<typeof makeWorkspace>) => string)} value
+ */
+function declaredWorkspace(value) {
+  const w = makeWorkspace({});
+  const file = path.join(w.ws, '_handoffs', '_lanes', 'POLICY.md');
+  const src = fs.readFileSync(file, 'utf8');
+  assert.ok(src.includes(WEB_ROW), 'premise: the workspace policy still carries the web row this suite writes');
+  const declared = WEB_ROW.replace(/ - \|$/, ` ${typeof value === 'function' ? value(w) : value} |`);
+  fs.writeFileSync(file, src.replace(WEB_ROW, declared));
+  return w;
+}
+
+T('a declared build command runs instead of npm, and the close\'s green line names it rather than npm run build', async () => {
+  // The declared "build tool" is this Node running a script that records where it ran.
+  /** @type {string} */
+  let script = '';
+  /** @type {string} */
+  let out = '';
+  const w = declaredWorkspace((ws) => {
+    script = path.join(ws.bin, 'declared-build.cjs');
+    assert.doesNotMatch(script, /\s/, 'premise: the temp path has no space, which an argument array would split on');
+    out = path.join(ws.ws, 'declared-build-ran.json');
+    fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(out)}, JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }));\nconsole.log('DECLARED-BUILD-OK');\n`);
+    return `\`node ${script}\``;
+  });
+  try {
+    fakeNpm(w, FAKE.ok); // present, and must not be the thing that runs
+
+    const green = greenOf(await close(w));
+    assert.equal(green.value, 'yes', green.note);
+    assert.ok(fs.existsSync(out), `the declared build did not run: ${green.note}`);
+    assert.ok(!fs.existsSync(w.out), 'npm ran even though the policy declared another build command');
+    assert.equal(real(JSON.parse(fs.readFileSync(out, 'utf8')).cwd), real(w.lane), 'the declared build did not run in the lane checkout');
+    assert.ok(green.note.includes('node') && green.note.includes(path.basename(script)), `the green line does not name the command that ran: ${green.note}`);
+    assert.doesNotMatch(green.note, /npm run build/, 'the green line still says npm run build for a declared command');
+  } finally {
+    removeTemp(w.ws);
+  }
+});
+
+T('RED-PROOF a declared command that is not on PATH makes the close a skip that names it, never a pass', async () => {
+  const w = declaredWorkspace('`pandoras-no-such-build-tool-9f3c build`');
+  try {
+    fakeNpm(w, FAKE.ok);
+    const green = greenOf(await close(w));
+    assert.equal(green.value, 'skip', green.note);
+    assert.ok(green.note.includes('pandoras-no-such-build-tool-9f3c'), `the skip does not name the command: ${green.note}`);
+    assert.match(green.note, /skip is not a pass/);
+    assert.ok(!fs.existsSync(w.out), 'npm ran as a fallback for a declared command that was not found');
+  } finally {
+    removeTemp(w.ws);
+  }
+});
+
+T('RED-PROOF a policy value attempting a shell pipeline is refused before the close runs anything', async () => {
+  const w = declaredWorkspace('`make build ; rm -rf .`');
+  try {
+    fakeNpm(w, FAKE.ok);
+    const r = await close(w);
+    assert.notEqual(r.status, 0, 'a policy carrying a shell metacharacter loaded without complaint');
+    const said = `${r.stdout}${r.stderr}`;
+    assert.match(said, /argument array, not a command line/, `the refusal does not explain the column: ${said.slice(0, 400)}`);
+    assert.ok(said.includes(';'), 'the refusal does not name the character it refused');
+    assert.equal(r.green, null, 'a close with an unloadable policy still measured the build gate');
+    assert.ok(!fs.existsSync(w.out), 'a refused policy value still reached a spawn');
+  } finally {
+    removeTemp(w.ws);
+  }
+});
+
 // ---------------------------------------------------------------- the library, called directly
 //
 // The same fake npm, handed to runBuild through the plan's npm_execpath, so the returned record
 // (duration, signal, exit code, tail) is asserted field by field rather than read back off a
 // printed line.
 
-const { buildPlan, runBuild, buildTimeoutFrom, tailBuffer, resolveNpm, treeKillCommand, BUILD_TIMEOUT_MS, BUILD_MAX_OUTPUT_BYTES } = await import('../src/lib/build.mjs');
+const { buildPlan, runBuild, buildTimeoutFrom, tailBuffer, resolveNpm, resolveOnPath, treeKillCommand, BUILD_TIMEOUT_MS, BUILD_MAX_OUTPUT_BYTES } = await import('../src/lib/build.mjs');
 const { freshBaseFromRevList } = await import('../src/lib/close.mjs');
 
 /** A resolver that always answers `cli` beside a fixed node, for plans whose command is asserted. */
@@ -531,6 +616,165 @@ T('RED-PROOF freshBaseFromRevList: a neighbour commit is not fresh and is named;
   const landed = freshBaseFromRevList({ listed: 'L M0 T', land: { tip: 'T', merge: 'L' }, isInBranch: (s) => s === 'T' });
   assert.equal(landed.fresh, true, landed.why);
   assert.equal(freshBaseFromRevList({ listed: null, isInBranch: () => true }).fresh, null);
+});
+
+// ---------------------------------------------------------------- a declared build command
+//
+// BUILDCMD1, 2026-09-15. A repository built by something other than npm used to get a skip, and a
+// skip is not a pass. The policy's `build` column names its build command as an argument array, and
+// the run has to keep every limit the npm path already had. These assertions hold each limit
+// SEPARATELY, because the failure worth catching is a declared command that works while quietly
+// running under a shell, under its own time limit, or under no kill at all.
+//
+// The declared command in the running cases is `node`, resolved on PATH by the real lookup, so the
+// same assertions run on macOS, Linux and Windows against a real child process.
+
+/**
+ * A declaration in the shape parseBuild returns, built here so these cases do not re-test the parser.
+ * @param {string} command
+ * @param {...string} args
+ */
+const decl = (command, ...args) => ({ command, args, label: [command, ...args].join(' ') });
+/**
+ * A PATH lookup that answers one fixed executable, for plans whose resolved command is asserted.
+ * @param {string} abs
+ * @returns {(name: string, o: {env: Record<string, string|undefined>}) => {command:string|null, tried:string[], shellOnly:string|null, searched:number}}
+ */
+const foundAt = (abs) => () => ({ command: abs, tried: [abs], shellOnly: null, searched: 1 });
+
+T('buildPlan: a declared command plans as an argument array on the PATH-resolved executable, in the lane checkout, and needs neither a package.json nor node_modules', () => {
+  const p = buildPlan({ checkout: '/c', pkg: null, nodeModules: false, build: decl('cargo', 'build', '--release'), lookup: foundAt('/usr/bin/cargo') });
+  assert.equal(p.verdict, null, `a declared command must not be ${p.verdict}: ${p.why}`);
+  assert.equal(p.command, '/usr/bin/cargo');
+  assert.deepEqual(p.args, ['build', '--release']);
+  assert.equal(p.label, 'cargo build --release');
+  assert.equal(p.cwd, '/c');
+  assert.equal(p.npm, null, 'a declared command must not resolve npm');
+  assert.match(p.why, /cargo build --release/);
+  assert.match(p.why, /\/usr\/bin\/cargo/, 'the plan does not name the executable it resolved');
+});
+
+T('buildPlan: a repository that declares nothing takes the npm path, byte for byte the plan it took before the column existed', () => {
+  const args = { checkout: '/c', pkg: { scripts: { build: 'x' } }, nodeModules: true, resolve: fixedResolver('/n/npm-cli.js') };
+  assert.deepEqual(buildPlan({ ...args, build: null }), buildPlan(args));
+  assert.deepEqual(buildPlan({ ...args, build: undefined }), buildPlan(args));
+  assert.equal(buildPlan({ ...args, build: null }).label, 'npm run build');
+  // And the npm-only verdicts stay npm-only: no build script is still n/a, no node_modules still skip.
+  assert.equal(buildPlan({ checkout: '/c', pkg: null, build: null }).verdict, 'n/a');
+  assert.equal(buildPlan({ checkout: '/c', pkg: { scripts: { build: 'x' } }, nodeModules: false, build: null }).verdict, 'skip');
+});
+
+T('RED-PROOF buildPlan: the time limit and the output cap are the dispatcher\'s, and a declaration carrying its own cannot lengthen either', () => {
+  const base = { checkout: '/c', pkg: null, lookup: foundAt('/usr/bin/make') };
+  assert.equal(buildPlan({ ...base, build: decl('make', 'build'), env: {} }).timeoutMs, BUILD_TIMEOUT_MS);
+  assert.equal(buildPlan({ ...base, build: decl('make', 'build'), env: {} }).maxOutputBytes, BUILD_MAX_OUTPUT_BYTES);
+  // The environment override is the dispatcher's own and still works.
+  assert.equal(buildPlan({ ...base, build: decl('make', 'build'), env: { PANDORAS_BUILD_TIMEOUT_MS: '1000' } }).timeoutMs, 1000);
+  // A declaration that grew extra fields — the shape a per-repository limit would arrive in — changes nothing.
+  const sneaky = { ...decl('make', 'build'), timeoutMs: 99 * 60_000, maxOutputBytes: 1, shell: true };
+  const p = buildPlan({ ...base, build: sneaky, env: {} });
+  assert.equal(p.timeoutMs, BUILD_TIMEOUT_MS, 'a policy declaration lengthened the build time limit');
+  assert.equal(p.maxOutputBytes, BUILD_MAX_OUTPUT_BYTES, 'a policy declaration changed the output cap');
+  assert.equal(/** @type {any} */ (p).shell, undefined, 'a policy declaration reached the spawn options');
+});
+
+T('RED-PROOF resolveOnPath: only absolute PATH entries are searched, so the checkout the build runs in can never supply the executable', () => {
+  /** @type {string[]} */
+  const seen = [];
+  const r = resolveOnPath('build', {
+    env: { PATH: ['.', '', 'rel/dir', '/usr/bin'].join(':') },
+    platform: 'linux',
+    exists: (p) => { seen.push(p); return false; },
+  });
+  assert.deepEqual(seen, ['/usr/bin/build'], 'a relative PATH entry was searched, which resolves against the repository being built');
+  assert.equal(r.command, null);
+  const hit = resolveOnPath('cargo', { env: { PATH: '/nope:/usr/bin' }, platform: 'linux', exists: (p) => p === '/usr/bin/cargo' });
+  assert.equal(hit.command, '/usr/bin/cargo');
+  assert.deepEqual(hit.tried, ['/nope/cargo', '/usr/bin/cargo']);
+});
+
+T('RED-PROOF resolveOnPath on Windows: an .exe is found, and a command that exists only as a batch file is NOT run, because that would need a shell', () => {
+  const win = { platform: 'win32', env: { PATH: 'C:\\bin;C:\\tools' } };
+  const exe = resolveOnPath('cargo', { ...win, exists: (p) => p === 'C:\\tools\\cargo.exe' });
+  assert.equal(exe.command, 'C:\\tools\\cargo.exe');
+  const batch = resolveOnPath('pnpm', { ...win, exists: (p) => p === 'C:\\bin\\pnpm.cmd' });
+  assert.equal(batch.command, null, 'a .cmd was spawned without a shell, which Node refuses and a shell would re-parse');
+  assert.equal(batch.shellOnly, 'C:\\bin\\pnpm.cmd');
+});
+
+T('RED-PROOF buildPlan: a declared command that is not on PATH is a skip naming it, and runBuild spawns nothing', async () => {
+  const missing = 'pandoras-no-such-build-tool-9f3c';
+  const p = buildPlan({ checkout: '/c', pkg: null, build: decl(missing, 'build'), env: baseEnv() });
+  assert.equal(p.verdict, 'skip', p.why);
+  assert.ok(p.why.includes(missing), `the skip does not name the command: ${p.why}`);
+  assert.match(p.why, /PATH/);
+  assert.match(p.why, /skip is not a pass/);
+  let called = false;
+  const r = await runBuild(p, { spawn: /** @type {any} */ (() => { called = true; throw new Error('must not spawn'); }) });
+  assert.equal(r.verdict, 'skip');
+  assert.equal(called, false);
+});
+
+T('RED-PROOF runBuild: a declared command is spawned as an argument array with shell false, detached only where the process group is, in the lane checkout', async () => {
+  /** @type {any} */
+  let call = null;
+  const spawn = /** @type {any} */ ((command, args, opts) => {
+    call = { command, args, opts };
+    const c = new EventEmitter();
+    Object.assign(c, { pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
+    setImmediate(() => { c.emit('spawn'); c.emit('exit', 0, null); c.emit('close', 0, null); });
+    return c;
+  });
+  const plan = buildPlan({ checkout: '/c', pkg: null, build: decl('cargo', 'build', '--release'), lookup: foundAt('/usr/bin/cargo') });
+  const r = await runBuild(plan, { spawn });
+  assert.equal(r.verdict, 'yes', r.why);
+  assert.match(r.why, /cargo build --release/, 'the verdict does not name the command that ran');
+  assert.equal(call.command, '/usr/bin/cargo');
+  assert.deepEqual(call.args, ['build', '--release'], 'the arguments did not reach spawn as an array');
+  assert.equal(call.opts.shell, false, 'a declared command was spawned through a shell');
+  assert.equal(call.opts.cwd, '/c');
+  assert.equal(call.opts.detached, process.platform !== 'win32');
+});
+
+T('runBuild: a declared command really runs, exits 0, and the verdict and the record name it', async () => {
+  await withBin(null, async (w, env) => {
+    const script = path.join(w.bin, 'declared-build.cjs');
+    fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(w.out)}, JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }));\nconsole.log('DECLARED-BUILD-OK');\n`);
+    const plan = buildPlan({ checkout: w.dir, pkg: null, build: decl('node', script), env });
+    assert.equal(plan.verdict, null, plan.why);
+    const r = await runBuild(plan, { env });
+    assert.equal(r.verdict, 'yes', r.why);
+    assert.equal(r.exitCode, 0);
+    assert.match(r.tail, /DECLARED-BUILD-OK/);
+    assert.ok(r.why.includes('node'), `the verdict does not name the command: ${r.why}`);
+    assert.equal(real(JSON.parse(fs.readFileSync(w.out, 'utf8')).cwd), w.dir, 'the declared build did not run in the lane checkout');
+  });
+});
+
+T('RED-PROOF runBuild: a declared command that exits non-zero is no, with its exit code and its output', async () => {
+  await withBin(null, async (w, env) => {
+    const script = path.join(w.bin, 'declared-build-fail.cjs');
+    fs.writeFileSync(script, `console.error('DECLARED-BUILD-FAILED');\nprocess.exit(2);\n`);
+    const r = await runBuild(buildPlan({ checkout: w.dir, pkg: null, build: decl('node', script), env }), { env });
+    assert.equal(r.verdict, 'no', r.why);
+    assert.equal(r.exitCode, 2);
+    assert.match(r.tail, /DECLARED-BUILD-FAILED/);
+  });
+});
+
+T(`RED-PROOF runBuild: a declared command that never exits is killed at the dispatcher's limit with its whole ${WIN ? 'process tree' : 'process group'}, and grades no`, async () => {
+  await withBin(null, async (w, env) => {
+    const script = path.join(w.bin, 'declared-build-hang.cjs');
+    fs.writeFileSync(script, `const fs = require('node:fs');\nconst OUT = ${JSON.stringify(w.out)};\nfs.writeFileSync(OUT, '{}');\n${FAKE.hang}\n`);
+    const plan = buildPlan({ checkout: w.dir, pkg: null, build: decl('node', script), env });
+    const r = await runBuild(plan, { env, timeoutMs: 1000, killGraceMs: 500 });
+    assert.equal(r.verdict, 'no', r.why);
+    assert.match(r.why, /1000 ms limit/);
+    assert.ok(r.durationMs >= 1000, `graded after ${r.durationMs} ms, before the limit`);
+    await assertTreeGone(w);
+    if (WIN) assert.match(r.why, /process tree was killed \(taskkill \/T \/F\)/);
+    else assert.ok(r.signal === 'SIGTERM' || r.signal === 'SIGKILL', `signal was ${r.signal}`);
+  });
 });
 
 // ---------------------------------------------------------------- run

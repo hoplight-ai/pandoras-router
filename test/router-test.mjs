@@ -13,10 +13,16 @@
 // count separately and you should watch that number rather than the total.
 
 import assert from 'node:assert/strict';
+// One read of one file this repository ships: the example policy document, so the backward
+// compatibility of the `build` column is asserted against the real document rather than a fixture
+// written to agree with the parser. Still no network, no secrets, no git and no writes.
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { readTable, stripCell } from '../src/lib/md-table.mjs';
 import { classify, editDistanceAtMostOne } from '../src/lib/prefixes.mjs';
-import { parseVerify, parseLiveness, setSeats, seatAllowed } from '../src/lib/policy.mjs';
+import { parseVerify, parseLiveness, parseBuild, setSeats, seatAllowed } from '../src/lib/policy.mjs';
 import { landMessage, landRefusal } from '../src/lib/land.mjs';
 import { parseReportFindings, findProvenance, findingTypeFor, subjectFor, findingArgs, FINDING_TYPES, PROVENANCE_WORDS } from '../src/lib/findings.mjs';
 import { normalizePath, normalizeScope, pathsIntersect, scopesIntersect, applyExclusive, setWorkspacePrefixes, WHOLE_REPO } from '../src/lib/scope.mjs';
@@ -41,6 +47,8 @@ import {
   closeReportRefusal, inScopeVerdict, scopeDiffPlan,
 } from '../src/lib/close.mjs';
 import { installPlan } from '../src/bin/lane-open.mjs';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const tests = [];
 const T = (name, fn) => tests.push({ name, fn });
@@ -3059,6 +3067,104 @@ const X12_LANES = [
   'LAND | x12 | web | x12-widget | 96a3c65 | 6dc3620 | Web-X12-Widget-Four-Sizes.md | done-2026-09-06-web-x12-widget-four-sizes.md | 2026-09-06T14:29:45.877Z',
 ].join('\n');
 
+// ---------------------------------------------------------------- the policy `build` column
+//
+// BUILDCMD1, 2026-09-15. The build gate could only build an npm project; a repository built by any
+// other tool got a skip, and a skip is not a pass. The `build` column names that repository's build
+// command AS AN ARGUMENT ARRAY — the command and its arguments, whitespace-separated — so nothing a
+// policy file says is ever a string a shell re-parses.
+//
+// The three refusals below are the whole distance between a configuration file and arbitrary
+// execution on the dispatcher's machine, so each one is asserted by its message. The person who
+// hits one of them is trying to write a shell pipeline into the column, which is why every refusal
+// says the column is an argument array and not a command line.
+
+T('policy build column: absent and `-` both mean the npm path, and a declared command parses into a command and its arguments', () => {
+  assert.equal(parseBuild('web', undefined), null, 'a repo whose policy has no build column must keep the npm path');
+  assert.equal(parseBuild('web', '-'), null, '`-` must keep the npm path');
+  assert.deepEqual(parseBuild('web', 'pnpm build'), { command: 'pnpm', args: ['build'], label: 'pnpm build' });
+  assert.deepEqual(parseBuild('web', 'yarn build'), { command: 'yarn', args: ['build'], label: 'yarn build' });
+  assert.deepEqual(parseBuild('web', 'bun run build'), { command: 'bun', args: ['run', 'build'], label: 'bun run build' });
+  assert.deepEqual(parseBuild('web', 'cargo build --release'), { command: 'cargo', args: ['build', '--release'], label: 'cargo build --release' });
+  assert.deepEqual(parseBuild('web', 'go build ./...'), { command: 'go', args: ['build', './...'], label: 'go build ./...' });
+  assert.deepEqual(parseBuild('web', 'make build'), { command: 'make', args: ['build'], label: 'make build' });
+  // Runs of whitespace are one separator, and the label is the normalized spelling.
+  assert.deepEqual(parseBuild('web', '  make   build  '), { command: 'make', args: ['build'], label: 'make build' });
+  // A command with no arguments at all is a complete declaration.
+  assert.deepEqual(parseBuild('web', 'make'), { command: 'make', args: [], label: 'make' });
+});
+
+T('RED-PROOF policy build column: a blank value that is not `-` is refused, because a blank cell is an unfinished row rather than a decision', () => {
+  for (const blank of ['', '   ', '\t']) {
+    assert.throws(() => parseBuild('web', blank), (/** @type {any} */ e) => {
+      assert.match(e.message, /policy: repo "web" has an empty build/);
+      assert.match(e.message, /argument array, not a command line/);
+      assert.match(e.message, /`-`/, 'the refusal does not say how to mean "use npm"');
+      return true;
+    }, `a blank build value ${JSON.stringify(blank)} was accepted`);
+  }
+});
+
+T('RED-PROOF policy build column: a first token that is not a bare command name is refused, so a repository cannot point the gate at a file it ships', () => {
+  for (const bad of ['./build.sh', '../tools/build', '/usr/local/bin/build', '~/bin/build', 'bin/build --release', '.\\build.cmd', 'C:\\tools\\build.exe']) {
+    assert.throws(() => parseBuild('web', bad), (/** @type {any} */ e) => {
+      assert.match(e.message, /policy: repo "web" has build/);
+      assert.match(e.message, /bare command name/);
+      assert.match(e.message, /argument array, not a command line/);
+      return true;
+    }, `"${bad}" was accepted as a build command`);
+  }
+});
+
+T('RED-PROOF policy build column: every shell metacharacter is refused at parse time, so a pipeline never reaches a spawn', () => {
+  const attempts = {
+    '|': 'npm run build | tee build.log',
+    '&': 'npm run build & rm -rf /',
+    ';': 'npm run build ; curl http://example.test',
+    '<': 'make build < input',
+    '>': 'make build > out.txt',
+    $: 'make build $HOME',
+    '`': 'make build `whoami`',
+    '\n': 'make build\nrm -rf .',
+  };
+  for (const [ch, value] of Object.entries(attempts)) {
+    assert.throws(() => parseBuild('web', value), (/** @type {any} */ e) => {
+      assert.match(e.message, /policy: repo "web" has build/);
+      assert.ok(e.message.includes(ch === '\n' ? 'a newline' : ch), `the refusal for ${JSON.stringify(ch)} does not name the character: ${e.message}`);
+      assert.match(e.message, /argument array, not a command line/);
+      return true;
+    }, `${JSON.stringify(value)} was accepted as a build command`);
+  }
+});
+
+T('RED-PROOF policy build column: a repos table written before this column existed parses exactly as it did, and the shipped example shows both a declared command and a `-`', () => {
+  // The backward-compatibility assertion. A table with no build column at all leaves every row's
+  // value undefined, which is the npm path — the shape of every policy document written before
+  // 2026-09-15, and the reason this column could be added without touching one of them.
+  const today = [
+    '<!-- table: repos -->',
+    '',
+    '| repo | tier | writers | dispatch | port | deploy | verify | url |',
+    '|---|---|---|---|---|---|---|---|',
+    '| `web` | 1 | 3 | product | 5173 | push | `string` | https://web.example.com |',
+    '| `docs` | 3 | 1 | infra | - | push | `none` | - |',
+    '',
+  ].join('\n');
+  for (const row of readTable(today, 'repos')) {
+    assert.equal(row.build, undefined, 'a table with no build column must not invent one');
+    assert.equal(parseBuild(row.repo, row.build), null, `repo ${row.repo} no longer takes the npm path`);
+  }
+  // And the document this project ships, read rather than restated: both forms present, both parse.
+  const shipped = fs.readFileSync(path.join(HERE, '..', 'examples', 'POLICY.md'), 'utf8');
+  const rows = readTable(shipped, 'repos');
+  assert.ok(rows.length >= 4, `premise: the example repos table still has its rows (${rows.length})`);
+  const parsed = rows.map((r) => [r.repo, parseBuild(r.repo, r.build)]);
+  assert.ok(parsed.some(([, b]) => b === null), 'the example policy shows no repo built by npm');
+  const [repo, declared] = /** @type {any} */ (parsed.find(([, b]) => b !== null) ?? []);
+  assert.ok(declared, 'the example policy shows no repo with a declared build command');
+  assert.equal(declared.command, 'cargo', `the declared example row for ${repo} changed shape`);
+  assert.deepEqual(declared.args, ['build', '--release']);
+});
 
 // ---------------------------------------------------------------- run
 

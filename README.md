@@ -154,7 +154,7 @@ An agent says it finished. `close` finds out. The shipped driver measures seven 
 | gate | what it measures |
 |---|---|
 | `merged` | every path the branch touched is byte-identical on main, compared blob by blob rather than by git ancestry, because a squash merge throws the fingerprints away |
-| `green` | the branch contains main's head, then `npm run build` in the lane's own checkout exited 0 inside the time limit |
+| `green` | the branch contains main's head, then the repo's build (`npm run build`, or the command its policy row declares) ran in the lane's own checkout and exited 0 inside the time limit |
 | `live` | the proof the repo's `verify` policy names ran and passed: a commit echo, a served string, or a script (see below for how strong each is) |
 | `renamed` | the brief carries a closed prefix, so the next dispatch does not fire it a second time |
 | `in-scope` | every path the branch touched is inside the scope the lane declared at open |
@@ -337,7 +337,7 @@ prose read by people. Copy them from `examples/` and edit:
 
 | file | what it holds |
 |---|---|
-| `POLICY.md` | one row per repo: writer cap, deploy style, how a deploy is proved, the liveness URL, exclusive paths, traps. Its `env` table names the `.env.local` keys a new worktree may receive; a repo with no row there receives none |
+| `POLICY.md` | one row per repo: writer cap, deploy style, how a deploy is proved, the liveness URL, the build command when npm is not the builder, exclusive paths, traps. Its `env` table names the `.env.local` keys a new worktree may receive; a repo with no row there receives none |
 | `PREFIXES.md` | the filename vocabulary. An unrecognized lifecycle word routes nothing and is named on stdout, rather than defaulting to live |
 | `CLAIMS.md` | the visible lock, one line per active lane. Ships empty |
 | `LANES.md` | the append-only ledger of every lane opened, landed and closed. Ships empty |
@@ -398,6 +398,20 @@ surprise on the day it matters.
   records `n/a`; one with no `node_modules`, an npm that cannot be found by those three routes (the
   skip names each path tried), or a close run with `--no-build`, records `skip`, which is not a
   pass.
+- **A repo that npm cannot build names its own build command in the policy's `build` column**, and
+  then the close runs that instead: `pnpm build`, `bun run build`, `cargo build --release`,
+  `go build ./...`, `make build`. The value is an argument array, never a command line: the command
+  and its arguments separated by spaces, handed to the operating system as a list. A value carrying
+  `|`, `&`, `;`, `<`, `>`, `$`, a backtick or a newline is refused when the policy file loads, by
+  name, before any close starts anything; so is a first token that is not a bare command name. The
+  command is looked up on PATH and nowhere else, never inside the repository being built, so a
+  repository cannot ship the executable its own gate runs; one that is not on PATH records `skip`
+  naming it, and npm is never a fallback for it. Everything else is identical to the npm build: the
+  same checkout, the same time limit and the same kill, both of them the dispatcher's and not
+  settable from the policy file, the same 64 KB tail, and the same verdicts. The gate's line names
+  the command that ran, so a close tells the two apart without opening the policy file. A repo whose
+  column says `-`, or a policy file with no `build` column at all, is built with npm exactly as
+  before.
 - **The two command guards in `hooks/`, `guard-irreversible.mjs` and `guard-report-overwrite.mjs`,
   are Node pattern matchers.** They use Node built-ins only and need nothing else on the path: no
   bash, no Python. The irreversible-action guard refuses what it can see on the command line or in

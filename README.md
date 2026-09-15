@@ -7,9 +7,9 @@ before any of them start, then independently verify what each one claims it fini
 
 ## The problem
 
-Every tool in this category that I compared, fourteen at the time of writing, solves parallel agents with isolation. Give each agent its own git
-worktree or its own container and they stop fighting over one working directory. That is real and
-it is not enough. Two agents in two copies can still rewrite the same file, and nothing notices
+Every tool in this category that I compared solves parallel agents with isolation. Give each agent
+its own git worktree or its own container and they stop fighting over one working directory. That
+is real and it is not enough. Two agents in two copies can still rewrite the same file, and nothing notices
 until the merge, by which point both pieces of work exist and one of them has to lose.
 
 The second half is quieter. An agent's report that it finished is the least reliable signal in the
@@ -145,7 +145,7 @@ releases the lane's claim.
 
 ### The liveness gate, and skip is not a pass
 
-`live` is the gate none of those fourteen runs. Every other check asks a question about the
+`live` is the gate none of the tools in [docs/PRIOR-ART.md](docs/PRIOR-ART.md) runs. Every other check asks a question about the
 repository, and all of them can be true while the page a person opens is last week's build. So the
 close sends a GET and reads what came back.
 
@@ -243,9 +243,11 @@ reading for its own sake. This project keeps an append-only ledger instead, beca
 lane's declared scope and its open timestamp recorded at the moment of dispatch, which no PR or CI
 fact carries.
 
-Of the fourteen tools compared, none did both scope-before-dispatch and
-verify-after, and none checked that a merged change is actually live at a URL. That gap, rather
-than either half on its own, is what this fills.
+Of the three entries written up in [docs/PRIOR-ART.md](docs/PRIOR-ART.md) — those two tools and the
+isolation-only class — none did both scope-before-dispatch and verify-after, and none checked that
+a merged change is actually live at a URL. That gap, rather than either half on its own, is what
+this fills. Three is what is written down and shown; it is not a survey of the field, and a fourth
+entry that does both halves would be worth a row and worth knowing about.
 
 ## Install
 

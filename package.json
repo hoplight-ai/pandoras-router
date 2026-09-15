@@ -13,6 +13,7 @@
   "files": ["src", "hooks", "examples", "LICENSE", "CODE_OF_CONDUCT.md", "SECURITY.md", "CONTRIBUTING.md"],
   "scripts": {
     "test": "node test/run.mjs && npm run typecheck",
+    "shared:check": "node test/shared-modules-test.mjs",
     "typecheck": "node test/typecheck.mjs"
   },
   "devDependencies": {

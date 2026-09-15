@@ -318,6 +318,106 @@ T('fresh base: the same branch after merging main grades on its build', async ()
   });
 });
 
+// ---------------------------------------------------------------- the close, on a declared command
+//
+// BUILDCMD1, 2026-09-15. The two assertions a reader of a close depends on: the gate's line names
+// the command that actually ran, so an npm build and a declared one are told apart without opening
+// the policy file; and a policy value attempting a shell pipeline is refused before the close starts
+// anything at all.
+
+/**
+ * The example repos table with a `build` column added: `value` for `web`, `-` for every other repo.
+ * Every other table in the document is untouched.
+ * @param {string} src @param {string} value
+ */
+function withBuildColumn(src, value) {
+  const at = src.indexOf('<!-- table: repos -->');
+  assert.ok(at >= 0, 'premise: the example policy still marks its repos table');
+  const head = src.slice(0, at);
+  const lines = src.slice(at).split('\n');
+  let seen = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    if (!t.startsWith('|')) { if (seen) break; else continue; }
+    seen++;
+    if (seen === 1) lines[i] = `${t} build |`;
+    else if (seen === 2) lines[i] = `${t}---|`;
+    else lines[i] = `${t} ${t.includes('`web`') ? value : '-'} |`;
+  }
+  assert.ok(seen >= 3, `premise: the example repos table still has rows (${seen})`);
+  return head + lines.join('\n');
+}
+
+/**
+ * A workspace whose policy declares a build command for `web`. `value` is the policy cell, built
+ * from the workspace when it needs a path out of it.
+ * @param {string | ((w: ReturnType<typeof makeWorkspace>) => string)} value
+ */
+function declaredWorkspace(value) {
+  const w = makeWorkspace({});
+  const file = path.join(w.ws, '_handoffs', '_lanes', 'POLICY.md');
+  fs.writeFileSync(file, withBuildColumn(fs.readFileSync(file, 'utf8'), typeof value === 'function' ? value(w) : value));
+  return w;
+}
+
+T('a declared build command runs instead of npm, and the close\'s green line names it rather than npm run build', async () => {
+  // The declared "build tool" is this Node running a script that records where it ran.
+  /** @type {string} */
+  let script = '';
+  /** @type {string} */
+  let out = '';
+  const w = declaredWorkspace((ws) => {
+    script = path.join(ws.bin, 'declared-build.cjs');
+    assert.doesNotMatch(script, /\s/, 'premise: the temp path has no space, which an argument array would split on');
+    out = path.join(ws.ws, 'declared-build-ran.json');
+    fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(out)}, JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }));\nconsole.log('DECLARED-BUILD-OK');\n`);
+    return `\`node ${script}\``;
+  });
+  try {
+    fakeNpm(w, FAKE.ok); // present, and must not be the thing that runs
+
+    const green = greenOf(await close(w));
+    assert.equal(green.value, 'yes', green.note);
+    assert.ok(fs.existsSync(out), `the declared build did not run: ${green.note}`);
+    assert.ok(!fs.existsSync(w.out), 'npm ran even though the policy declared another build command');
+    assert.equal(real(JSON.parse(fs.readFileSync(out, 'utf8')).cwd), real(w.lane), 'the declared build did not run in the lane checkout');
+    assert.ok(green.note.includes('node') && green.note.includes(path.basename(script)), `the green line does not name the command that ran: ${green.note}`);
+    assert.doesNotMatch(green.note, /npm run build/, 'the green line still says npm run build for a declared command');
+  } finally {
+    removeTemp(w.ws);
+  }
+});
+
+T('RED-PROOF a declared command that is not on PATH makes the close a skip that names it, never a pass', async () => {
+  const w = declaredWorkspace('`pandoras-no-such-build-tool-9f3c build`');
+  try {
+    fakeNpm(w, FAKE.ok);
+    const green = greenOf(await close(w));
+    assert.equal(green.value, 'skip', green.note);
+    assert.ok(green.note.includes('pandoras-no-such-build-tool-9f3c'), `the skip does not name the command: ${green.note}`);
+    assert.match(green.note, /skip is not a pass/);
+    assert.ok(!fs.existsSync(w.out), 'npm ran as a fallback for a declared command that was not found');
+  } finally {
+    removeTemp(w.ws);
+  }
+});
+
+T('RED-PROOF a policy value attempting a shell pipeline is refused before the close runs anything', async () => {
+  const w = declaredWorkspace('`make build ; rm -rf .`');
+  try {
+    fakeNpm(w, FAKE.ok);
+    const r = await close(w);
+    assert.notEqual(r.status, 0, 'a policy carrying a shell metacharacter loaded without complaint');
+    const said = `${r.stdout}${r.stderr}`;
+    assert.match(said, /argument array, not a command line/, `the refusal does not explain the column: ${said.slice(0, 400)}`);
+    assert.ok(said.includes(';'), 'the refusal does not name the character it refused');
+    assert.equal(r.green, null, 'a close with an unloadable policy still measured the build gate');
+    assert.ok(!fs.existsSync(w.out), 'a refused policy value still reached a spawn');
+  } finally {
+    removeTemp(w.ws);
+  }
+});
+
 // ---------------------------------------------------------------- the library, called directly
 //
 // The same fake npm, handed to runBuild through the plan's npm_execpath, so the returned record

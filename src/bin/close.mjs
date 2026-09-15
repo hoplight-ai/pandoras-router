@@ -132,11 +132,19 @@ function mergeNote(g, total, BASE) {
 // THE RUN IS BOUNDED (lib/build.mjs): no shell (npm runs as node on npm-cli.js, so Windows builds
 // too), a time limit that kills the process group on POSIX and the process tree on Windows, and only
 // the last 64 KB of output kept. A timeout or a signal is no; npm that cannot be resolved is skip.
-async function gateGreen({ checkoutDir, run, repoDir, gitRepo, rec, BASE }) {
+//
+// WHICH BUILD RAN IS ON THE LINE (BUILDCMD1, 2026-09-15). A repo whose policy row declares a `build`
+// command gets that command instead of npm, under the same limits, and the gate's own sentence names
+// what it ran: `cargo build --release (/usr/bin/cargo, declared in the policy file) ...` rather than
+// `npm run build`. No new gate and no new record column — a reader of a close can just tell the two
+// apart without opening the policy file. A declared command not on PATH is a skip naming it, and npm
+// is never a fallback for it: falling back would report a pass for a build nobody asked for.
+async function gateGreen({ checkoutDir, run, repoDir, gitRepo, rec, rp, BASE }) {
   let pkg = null;
   try { pkg = JSON.parse(fs.readFileSync(path.join(checkoutDir, 'package.json'), 'utf8')); } catch { pkg = null; }
-  const plan = buildPlan({ checkout: checkoutDir, pkg, nodeModules: fs.existsSync(path.join(checkoutDir, 'node_modules')), env: process.env });
-  if (plan.verdict === 'n/a') return { value: plan.verdict, note: plan.why, tail: '' };
+  const plan = buildPlan({ checkout: checkoutDir, pkg, nodeModules: fs.existsSync(path.join(checkoutDir, 'node_modules')), build: rp?.build ?? null, env: process.env });
+  const label = plan.label;
+  if (plan.verdict === 'n/a') return { value: plan.verdict, note: plan.why, tail: '', label };
 
   let baseNote = '';
   if (gitRepo && !isBranchless(rec.branch)) {
@@ -147,16 +155,16 @@ async function gateGreen({ checkoutDir, run, repoDir, gitRepo, rec, BASE }) {
       isInBranch: (sha) => git(repoDir, ['merge-base', '--is-ancestor', sha, rec.branch]) !== null,
       base: BASE,
     });
-    if (base.fresh === null) return { value: 'skip', note: `SKIP: ${base.why}. The build was not run. A skip is not a pass.`, tail: '' };
-    if (!base.fresh) return { value: 'no', note: `fresh base: ${base.why} The build was not run.`, tail: '' };
+    if (base.fresh === null) return { value: 'skip', note: `SKIP: ${base.why}. The build was not run. A skip is not a pass.`, tail: '', label };
+    if (!base.fresh) return { value: 'no', note: `fresh base: ${base.why} The build was not run.`, tail: '', label };
     baseNote = `; fresh base: ${base.why}`;
   }
 
-  if (plan.verdict) return { value: plan.verdict, note: plan.why, tail: '' };
+  if (plan.verdict) return { value: plan.verdict, note: plan.why, tail: '', label };
   if (!run)
-    return { value: 'skip', note: 'SKIP: --no-build was passed, so no build was run. A skip is not a pass.', tail: '' };
+    return { value: 'skip', note: `SKIP: --no-build was passed, so \`${label}\` was not run. A skip is not a pass.`, tail: '', label };
   const r = await runBuild(plan);
-  return { value: r.verdict, note: `${r.why}${baseNote}`, tail: r.tail };
+  return { value: r.verdict, note: `${r.why}${baseNote}`, tail: r.tail, label };
 }
 
 // ── GATE: live ────────────────────────────────────────────────────────────────────────────────
@@ -290,7 +298,7 @@ async function main() {
 
   // ---- green
   const checkoutDir = rec.worktree && rec.worktree !== '-' ? path.resolve(ROOT, rec.worktree) : repoDir;
-  const green = await gateGreen({ checkoutDir, run: !noBuild, repoDir, gitRepo, rec, BASE });
+  const green = await gateGreen({ checkoutDir, run: !noBuild, repoDir, gitRepo, rec, rp, BASE });
 
   // ---- live
   const live = await gateLive({ rp, rec, repoDir, gitRepo, checkoutDir, proofOverride });
@@ -405,7 +413,7 @@ async function main() {
   console.log(`close ${rec.lane} (${rec.repo})${apply ? '' : ' — MEASURE ONLY, nothing written'}`);
   for (const [name, value, note] of rows) console.log(`  ${name.padEnd(14)} ${String(value).padEnd(8)} ${note}`);
   if (green.value === 'no' && green.tail) {
-    console.log(`  build output, the last ${Buffer.byteLength(green.tail)} bytes npm run build printed:`);
+    console.log(`  build output, the last ${Buffer.byteLength(green.tail)} bytes ${green.label ?? 'npm run build'} printed:`);
     for (const l of green.tail.replace(/\n$/, '').split('\n')) console.log(`    | ${l}`);
   }
 

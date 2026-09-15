@@ -9,6 +9,9 @@
 //   pandoras-router land       land a lane on main as ONE merge commit + a LAND record
 //                              (the audit link: change on main -> lane -> brief -> report;
 //                              revert is `git revert -m 1 <merge>`; the branch never moves)
+//   pandoras-router revert     undo one landed lane: reverse its LAND merge with a new commit and
+//                              write a REVERT record. Never force-pushes, never deletes a branch,
+//                              never pushes at all — it stops after the local commit.
 //   pandoras-router claim      take/release a claim WITHOUT a lane, for direct work
 //   pandoras-router apply      apply a unified diff atomically, by index
 //
@@ -30,6 +33,7 @@ const MAP = {
   open: ['lane-open.mjs'],
   close: ['close.mjs'],
   land: ['lane-land.mjs'],
+  revert: ['revert.mjs'],
   claim: ['claim.mjs'],
   apply: ['apply-atomic.mjs'],
 };

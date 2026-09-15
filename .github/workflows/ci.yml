@@ -22,19 +22,27 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v7
+      # Pinned to commit SHAs, not to the moving v7 tags. A tag is a pointer its owner can move,
+      # and these two actions run with a checkout of this repository on every push; whoever can
+      # move the tag chooses what runs. The trailing comment keeps the release readable — resolve
+      # a new one with `gh api repos/actions/checkout/git/ref/tags/<tag> --jq .object.sha` before
+      # changing either line, and never by hand.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: ${{ matrix.node }}
 
-      # This package has zero runtime or dev dependencies (no package-lock.json, nothing to
-      # fetch), so there is nothing for `npm ci` to do. The step still exists, with this id, so
-      # the condition below has something to read — the same shape every other workflow in this
-      # workspace uses to keep a red gate from hiding the ones behind it.
+      # Zero RUNTIME dependencies, two dev ones: the TypeScript compiler and Node's type
+      # declarations, both pinned to an exact version and recorded with an integrity hash in the
+      # committed package-lock.json. `npm ci` installs exactly what that file names and fails if
+      # the manifest and the lockfile disagree, so a run cannot quietly pick up a version nobody
+      # reviewed. `--ignore-scripts` means no package's install hooks execute here. The step keeps
+      # this id so the condition below has something to read — the same shape every other workflow
+      # in this workspace uses to keep a red gate from hiding the ones behind it.
       - name: install
         id: install
-        run: echo "zero dependencies, nothing to install"
+        run: npm ci --ignore-scripts
 
       # `npm test` runs the assertion suite (test/run.mjs) and then the type check.
       - name: test

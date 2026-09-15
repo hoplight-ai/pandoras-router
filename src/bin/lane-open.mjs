@@ -144,30 +144,38 @@ export function installPlan({ inPlace, hasPackageJson, hasModules, install }) {
 }
 
 /**
- * DOES THIS NEW CHECKOUT GET THE REPO'S `.env.local`?
+ * DOES THIS NEW CHECKOUT GET ANY OF THE REPO'S `.env.local`, AND IF SO, WHICH KEYS?
  *
- * THE DEFECT: `git worktree add` copies tracked files only, and a repo that needs a credential
- * keeps it in a gitignored `.env.local`, so a fresh checkout has none. A lane worker whose first
- * job touches one fails cold — one wasted run, discovered only because a dispatcher happened to be
- * watching. Unlike node_modules (hundreds of megabytes, correctly opt-in via --install), an env
- * file is bytes, not megabytes, so there is no disk argument for making this one opt-in too: it is
- * copied whenever it is missing. THIS MULTIPLIES A CREDENTIAL FILE ONCE PER CHECKOUT; the README
- * says so under "What this touches on your machine".
+ * THE PROBLEM THIS SOLVES: `git worktree add` copies tracked files only, and a repo that needs a
+ * credential keeps it in a gitignored `.env.local`, so a fresh checkout has none. A lane worker
+ * whose first job touches one fails cold — one wasted run, discovered only because a dispatcher
+ * happened to be watching.
+ *
+ * NOTHING IS COPIED UNLESS THE POLICY NAMES KEYS, and this is the half that was wrong. The
+ * default used to be the whole file, so a repository whose policy said nothing at all about
+ * credentials had its entire `.env.local` multiplied into every checkout the router created. An
+ * allowlist added later narrowed WHAT was copied where a row existed and left that default alone,
+ * which is the worst of both: the operator who thought about it got the narrow copy and the one
+ * who never thought about it got everything. The safe default is nothing, so a credential leaves
+ * the repository only because somebody wrote its name down.
+ *
+ * Turning it on is one row in POLICY.md's `env` table, `| <repo> | KEY_ONE KEY_TWO |`, and
+ * copyEnvFile prints that sentence whenever it declines to copy. The cost of the default is a
+ * lane that has to be told once; the cost of the old default was a credential file in every
+ * worktree of every repository, whether or not anything there needed one.
  *
  * NEVER OVERWRITES: a worktree that already carries its own `.env.local` — a RESUME, or a lane
  * that wrote one itself before this ran — is left exactly as it is.
  *
- * An optional per-repo allowlist (POLICY.md's `env` table, Router ENV1) narrows WHAT is copied,
- * never WHETHER — that decision stays exactly this function's job. See copyEnvFile below.
- *
- * @param {{inPlace:boolean, repoEnvExists:boolean, worktreeEnvExists:boolean}} p
+ * @param {{inPlace:boolean, repoEnvExists:boolean, worktreeEnvExists:boolean, envKeys?:string[]|null}} p
  * @returns {{copy:boolean, why:string}}
  */
-export function envCopyPlan({ inPlace, repoEnvExists, worktreeEnvExists }) {
+export function envCopyPlan({ inPlace, repoEnvExists, worktreeEnvExists, envKeys = null }) {
   if (inPlace) return { copy: false, why: 'an in-place lane works in the repo itself, which already has its own .env.local if it has one' };
   if (worktreeEnvExists) return { copy: false, why: 'this checkout already carries its own .env.local' };
   if (!repoEnvExists) return { copy: false, why: 'the repo carries no .env.local to copy' };
-  return { copy: true, why: 'the repo carries a .env.local this checkout does not have yet' };
+  if (!envKeys || !envKeys.length) return { copy: false, why: 'this repo has no env row in the policy, so no key is named and nothing is copied' };
+  return { copy: true, why: 'the policy names keys for this repo and this checkout has no .env.local yet' };
 }
 
 /**
@@ -198,15 +206,44 @@ export function filterEnvLines(text, keys) {
 }
 
 /**
+ * WRITE A CREDENTIAL FILE THAT WAS PRIVATE FROM THE MOMENT IT EXISTED.
+ *
+ * THE DEFECT THIS CLOSES: the copy used to be written at the process umask and chmodded to 600
+ * afterwards. Between those two calls the file sat at 0o644 on an ordinary machine — readable by
+ * every account on it — and a final mode of 600 does not prove otherwise. `test/env-copy-test.mjs`
+ * measures the mode the first moment the file exists, which is the only measurement that can tell
+ * the two apart.
+ *
+ * `wx` also closes the gap between "the destination does not exist" and "write it": the open fails
+ * outright if something appeared in between, rather than landing on top of it. The mode argument
+ * is masked by the umask like any other open, and 0o600 has no group or other bits for a umask to
+ * take away, so the result is exactly 0o600 whatever the operator's umask is.
+ *
+ * @param {string} destPath
+ * @param {string|Buffer} contents
+ * @returns {void}
+ */
+function writePrivateFile(destPath, contents) {
+  const fd = fs.openSync(destPath, 'wx', 0o600);
+  try {
+    fs.writeFileSync(fd, contents);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
  * The disk half of envCopyPlan. A plain file copy, never a symlink (a symlinked credential would
  * follow the repo's own file if either copy is ever edited, which defeats the point of a lane
- * having its own checkout), mode 600 because a credential file has no business being
- * group/world-readable. Never throws: a failed copy is reported and the lane still opens correctly
- * — the same "loud, not fatal" shape installPlan's own failure handling uses just above.
+ * having its own checkout), created at mode 600 because a credential file has no business being
+ * group/world-readable for even an instant. Never throws: a failed copy is reported and the lane
+ * still opens correctly — the same "loud, not fatal" shape installPlan's own failure handling uses
+ * just above.
  *
- * `envKeys`, when given (POLICY.md's optional `env` table — see policy.mjs), narrows the copy to
- * exactly those variable names via filterEnvLines instead of copying the whole file. Omitted or
- * empty means today's behaviour: the whole file, byte for byte.
+ * `envKeys` is POLICY.md's `env` table for this repo (see policy.mjs) and is the ONLY thing that
+ * makes a copy happen at all. With no keys there is no copy, and there is deliberately no
+ * copy-everything path left in this function: a whole credential file cannot be multiplied into a
+ * checkout by any argument, only the keys somebody named.
  *
  * @param {{repoDir:string, checkoutDir:string, inPlace:boolean, envKeys?:string[]|null}} p
  * @returns {{copy:boolean, why:string, copied:boolean, error:string|null}}
@@ -214,30 +251,26 @@ export function filterEnvLines(text, keys) {
 export function copyEnvFile({ repoDir, checkoutDir, inPlace, envKeys = null }) {
   const repoEnvPath = path.join(repoDir, '.env.local');
   const worktreeEnvPath = path.join(checkoutDir, '.env.local');
-  const plan = envCopyPlan({
-    inPlace,
-    repoEnvExists: fs.existsSync(repoEnvPath),
-    worktreeEnvExists: !inPlace && fs.existsSync(worktreeEnvPath),
-  });
+  const repoEnvExists = fs.existsSync(repoEnvPath);
+  const worktreeEnvExists = !inPlace && fs.existsSync(worktreeEnvPath);
+  const plan = envCopyPlan({ inPlace, repoEnvExists, worktreeEnvExists, envKeys });
   if (!plan.copy) {
-    if (!inPlace && !fs.existsSync(worktreeEnvPath) && !fs.existsSync(repoEnvPath)) {
+    if (!inPlace && !worktreeEnvExists && !repoEnvExists) {
       console.log('  env        no .env.local to copy');
+    } else if (!inPlace && !worktreeEnvExists && (!envKeys || !envKeys.length)) {
+      // The one sentence that turns copying on. Printed whenever there was something to copy and
+      // the policy named nothing, so nobody has to read this file to find out why the checkout has
+      // no credential.
+      console.log('  env        nothing copied: this repo has no env row in POLICY.md. To copy keys, add a row to its env table: | <repo> | KEY_ONE KEY_TWO |');
     }
     return { ...plan, copied: false, error: null };
   }
   try {
-    if (envKeys && envKeys.length) {
-      const source = fs.readFileSync(repoEnvPath, 'utf8');
-      const { lines, found, missing } = filterEnvLines(source, envKeys);
-      fs.writeFileSync(worktreeEnvPath, lines.length ? `${lines.join('\n')}\n` : '');
-      fs.chmodSync(worktreeEnvPath, 0o600);
-      const missingNote = missing.length ? `; missing: ${missing.join(', ')}` : '';
-      console.log(`  env        ${found.length} of ${envKeys.length} keys copied from the repo (mode 600)${missingNote}`);
-      return { ...plan, copied: true, error: null };
-    }
-    fs.copyFileSync(repoEnvPath, worktreeEnvPath);
-    fs.chmodSync(worktreeEnvPath, 0o600);
-    console.log('  env        .env.local copied from the repo (mode 600)');
+    const source = fs.readFileSync(repoEnvPath, 'utf8');
+    const { lines, found, missing } = filterEnvLines(source, envKeys ?? []);
+    writePrivateFile(worktreeEnvPath, lines.length ? `${lines.join('\n')}\n` : '');
+    const missingNote = missing.length ? `; missing: ${missing.join(', ')}` : '';
+    console.log(`  env        ${found.length} of ${(envKeys ?? []).length} keys copied from the repo (mode 600)${missingNote}`);
     return { ...plan, copied: true, error: null };
   } catch (e) {
     const error = String(e.message).slice(0, 160);
@@ -475,9 +508,9 @@ function main() {
   }
   // CREDENTIALS. `git worktree add` copies tracked files only, so a fresh checkout has no
   // .env.local even when the repo it came from needs one to run at all. See envCopyPlan above.
-  // Not gated on --install: bytes, not megabytes, so there is no reason to make a lane ask twice.
-  // envKeys narrows the copy to POLICY.md's per-repo allowlist (Router ENV1); a repo with no `env`
-  // row there gets null, which is today's whole-file behaviour, unchanged.
+  // envKeys is POLICY.md's per-repo allowlist and is the only thing that makes a copy happen: a
+  // repo with no `env` row there gets null, which means nothing is copied and open prints the one
+  // sentence that says how to switch it on.
   copyEnvFile({ repoDir, checkoutDir, inPlace, envKeys: repoPolicy(r.policy, card.repo)?.env ?? null });
   console.log(`  report     ${card.report}`);
   console.log(`  claim      ${claimLine}`);

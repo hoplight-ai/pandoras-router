@@ -54,6 +54,10 @@ Any other value refuses to load, and the error lists these five. When a sha or h
 reach its endpoint, the gate records skip or no with the reason; it never falls back to the string
 probe. The sha and header forms take auth and timeout from the repo's `liveness` row when it has one.
 
+`url` is an absolute `http://` or `https://` URL, or `-` for a repo that serves nothing. Anything
+else refuses to load and names the repo and the value — the same rule the liveness table's own url
+has always been held to.
+
 <!-- table: repos -->
 
 | repo | tier | writers | dispatch | port | deploy | verify | url |

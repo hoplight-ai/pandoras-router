@@ -80,6 +80,18 @@ export function loadPolicy(root) {
     if (!r.dispatch) throw new Error(`policy: repo "${r.repo}" has no dispatch seat; every repo names exactly one`);
     if (!seatAllowed(r.dispatch)) throw new Error(`policy: repo "${r.repo}" names dispatch "${r.dispatch}"; must be one of ${[...SEATS].join(', ')}`);
 
+    // ── THE SAME RULE AS THE LIVENESS TABLE'S URL, AND FOR THE SAME REASON ─────────────────────
+    //
+    // parseLiveness has refused a non-absolute URL since it was written, naming the repo and the
+    // value. This column was taken verbatim, so `example.com/app`, `/app` and `javascript:...`
+    // all parsed clean here and were only ever discovered by whatever used them later, with a
+    // message about something else. A policy file is trusted input; trusted input still gets to
+    // be wrong, and the line that reads it is the cheap place to say so. `-` still means the repo
+    // declares no url at all.
+    const url = String(r.url ?? '').trim();
+    if (url !== '-' && !/^https?:\/\//i.test(url))
+      throw new Error(`policy: repo "${r.repo}" has url "${url}"; must be an absolute http(s) URL`);
+
     repos.set(r.repo, {
       repo: r.repo,
       tier,
@@ -88,7 +100,7 @@ export function loadPolicy(root) {
       port: r.port === '-' ? null : Number(r.port),
       deploy: r.deploy,
       verify: parseVerify(r.repo, r.verify),
-      url: r.url === '-' ? null : r.url,
+      url: url === '-' ? null : url,
       traps: [],
       owner: null,
       exclusive: [],

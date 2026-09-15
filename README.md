@@ -383,6 +383,14 @@ surprise on the day it matters.
 - All three guards append one line per refusal to `hooks/guard-log.jsonl` (gitignored) when the
   harness supplies a session id, and nothing on a pass.
 
+## Contributing, and reporting a security problem
+
+[CONTRIBUTING.md](CONTRIBUTING.md) covers how to run the suite, what a pull request needs, and the
+rule that every reported bug gets a failing test before it gets a fix.
+
+Found a vulnerability? Please do not open an issue. [SECURITY.md](SECURITY.md) has the address, the
+seven-day reply window, and which versions are covered.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

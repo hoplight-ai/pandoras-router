@@ -79,7 +79,17 @@ One card now says FIRE NOW and the other says QUEUED, naming the lane it waits o
 paths where the two scopes intersect. That refusal is the whole product.
 
 `node src/bin/router.mjs` with no arguments lists the subcommands: `alloc`, `open`, `close`,
-`land`, `claim`, `apply`. `alloc` writes no record; it only produces cards.
+`land`, `revert`, `claim`, `apply`. `alloc` writes no record; it only produces cards.
+
+`land` puts a lane on main as one merge commit and writes a LAND record carrying the branch tip and
+the merge sha, precisely so undoing it later is one lookup and one command. `revert <lane>` is that
+command: it finds the lane's LAND record, reverses the merge with `git revert -m 1 <merge>`, and
+writes a REVERT record saying so. **It adds a commit; it never rewrites history.** It never
+force-pushes and it never deletes a branch — the lane's branch keeps pointing at the exact commit it
+always did, because that tip is still the record of what the lane wrote, and reversing the merge on
+main does not make it untrue. It does not push, either: it stops after the local commit and prints
+the one line to run next: push the lane's own branch and open a pull request. Pushing main is a
+separate, later act, never this command's.
 
 ## The two ideas
 

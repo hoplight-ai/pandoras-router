@@ -3,10 +3,14 @@
   "version": "0.1.0",
   "description": "A dispatcher and inspector for running many AI coding agents in parallel on one codebase: it proves declared file scopes disjoint before two agents run side by side, holds visible locks, derives collision-proof output filenames, and independently verifies an agent's claim that it finished.",
   "license": "MIT",
+  "author": "Whit Pendergast <whit@hoplight.ai>",
+  "homepage": "https://pandoras-router.vercel.app",
+  "repository": { "type": "git", "url": "git+https://github.com/hoplight-ai/pandoras-router.git" },
+  "bugs": { "url": "https://github.com/hoplight-ai/pandoras-router/issues" },
   "type": "module",
   "engines": { "node": ">=22" },
   "bin": { "pandoras-router": "src/bin/router.mjs" },
-  "files": ["src", "hooks", "examples", "LICENSE", "CODE_OF_CONDUCT.md"],
+  "files": ["src", "hooks", "examples", "LICENSE", "CODE_OF_CONDUCT.md", "SECURITY.md", "CONTRIBUTING.md"],
   "scripts": {
     "test": "node test/run.mjs && npm run typecheck",
     "typecheck": "node test/typecheck.mjs"

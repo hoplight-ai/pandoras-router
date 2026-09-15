@@ -88,6 +88,8 @@ export function loadPolicy(root) {
       port: r.port === '-' ? null : Number(r.port),
       deploy: r.deploy,
       verify: parseVerify(r.repo, r.verify),
+      // OPTIONAL, and absent means the npm path exactly as before. See parseBuild below.
+      build: parseBuild(r.repo, r.build),
       url: r.url === '-' ? null : r.url,
       traps: [],
       owner: null,
@@ -287,6 +289,74 @@ export function parseVerify(repo, raw) {
     return { kind: 'script', name };
   }
   throw new Error(`policy: repo "${repo}" has verify "${v}"; must be one of ${VERIFY_FORMS.join(', ')}`);
+}
+
+// ── THE `build` COLUMN — AN ARGUMENT ARRAY, NEVER A COMMAND LINE (BUILDCMD1, 2026-09-15) ────────
+//
+// The build gate could only build an npm project. A repository built by any other tool had no build
+// to run, so the gate was a skip, and a skip is not a pass — a whole class of repository closed with
+// its build unproven. The `build` column names that repository's build command, so `pnpm build`,
+// `bun run build`, `cargo build --release`, `go build ./...` and `make build` all get a real gate.
+//
+// THE COLUMN IS READ AS AN ARGUMENT ARRAY: the command, then its arguments, split on whitespace and
+// handed to spawn with shell false. It is never a command line and nothing ever re-parses it. That
+// matters more here than anywhere else in this file, because the close RUNS this value on the
+// dispatcher's machine: three rules are the whole distance between a configuration file and
+// arbitrary execution, and all three are enforced here, at parse time, before any close can start.
+//
+//   1. A blank value is refused. `-` is how a row says "use npm"; a blank cell is an unfinished row,
+//      and reading it as "use npm" would hide the difference.
+//   2. The first token must be a BARE COMMAND NAME — no path separator, no `~`. The command is
+//      looked up on PATH and nowhere else (see resolveOnPath in lib/build.mjs); a path here would be
+//      the repository choosing which file the gate executes, and a repository ships its own files.
+//   3. No shell metacharacter anywhere in the value: | & ; < > $ ` or a newline. None of them means
+//      anything to an argument array, so a value containing one was written by somebody who believed
+//      a shell would read it — and the honest answer to that belief is a refusal that says so.
+//
+// Every refusal says the column is an argument array and not a command line, because that sentence
+// is the one the person who hit it needs.
+//
+// OPTIONAL AND BACKWARD COMPATIBLE. A repos table with no `build` column at all leaves every row's
+// value `undefined`, which is null here and today's npm behaviour in the gate. Every policy document
+// written before this column existed parses unchanged.
+const BUILD_ARRAY_RULE = 'the build column is an argument array, not a command line: the command and its arguments separated by spaces, spawned with no shell';
+
+/** The shell metacharacters refused by name. A newline is spelled out rather than printed. */
+const SHELL_METACHARACTERS = [
+  ['|', '|'], ['&', '&'], [';', ';'], ['<', '<'], ['>', '>'], ['$', '$'], ['`', '`'], ['\n', 'a newline'], ['\r', 'a newline'],
+];
+
+/**
+ * One repos-table `build` cell. Returns null for "no declared command, use npm", or the command and
+ * its arguments. Throws, naming the repo and the reason, on anything else. Pure.
+ *
+ * @param {string} repo
+ * @param {string|undefined} raw
+ * @returns {{command:string, args:string[], label:string}|null}
+ */
+export function parseBuild(repo, raw) {
+  if (raw === undefined || raw === null) return null;
+  const value = String(raw);
+  if (value.trim() === '-') return null;
+  if (value.trim() === '')
+    throw new Error(`policy: repo "${repo}" has an empty build value; write \`-\` to mean "use npm", or name a command. ${BUILD_ARRAY_RULE}.`);
+
+  for (const [ch, shown] of SHELL_METACHARACTERS) {
+    if (value.includes(ch))
+      throw new Error(`policy: repo "${repo}" has build "${printable(value)}", which contains ${shown}. ${BUILD_ARRAY_RULE}, so a shell metacharacter in it means nothing and is refused rather than passed to the command as a literal argument.`);
+  }
+
+  const tokens = value.trim().split(/\s+/).filter(Boolean);
+  const command = tokens[0];
+  if (command.includes('/') || command.includes('\\') || command.startsWith('~'))
+    throw new Error(`policy: repo "${repo}" has build "${printable(value)}", whose first token "${command}" is not a bare command name. The command is looked up on PATH only, never inside the repository, so a path here is refused. ${BUILD_ARRAY_RULE}.`);
+
+  return { command, args: tokens.slice(1), label: tokens.join(' ') };
+}
+
+/** A value safe to put in one line of an error message. */
+function printable(v) {
+  return String(v).replace(/\r/g, '\\r').replace(/\n/g, '\\n');
 }
 
 export function repoPolicy(policy, repo) {

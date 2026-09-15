@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // claim.mjs — take and release a claim WITHOUT opening a lane.
 //
 // WHY THIS EXISTS. Every claim in CLAIMS.md was written by `lane-open`, which means a dispatch that
@@ -24,18 +25,18 @@
 // refusal that hands you a removal remedy is the defect Ops-BETA2 exists to fix; building a second
 // copy of it here would be building the bug on purpose.
 
-import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { loadPolicy, repoPolicy } from '../lib/policy.mjs';
 import {
   readClaims,
   activeWriters,
   activeSweeps,
-  appendClaim,
+  appendToClaims,
+  rewriteClaims,
   releaseClaim,
   CLAIM_ACTIVE_HOURS,
 } from '../lib/claims.mjs';
+import { withLock } from '../lib/lock.mjs';
 import { localDate } from '../lib/naming.mjs';
 
 // THE WORKSPACE ROOT is the directory holding `_handoffs/` and your repos. It is NEVER the
@@ -101,46 +102,52 @@ function take(args) {
     ]);
   }
 
-  const now = new Date();
-  const { rows } = readClaims(ROOT, now.getTime());
-  const held = activeWriters(rows, repo);
+  // THE CAP CHECK AND THE WRITE ARE ONE LOCKED SECTION (CONC1, 2026-09-14). They were a read, a
+  // decision and a write with nothing between them, so two takes at the same instant each counted
+  // zero holders and both wrote: two writers on a writers:1 repo, measured by concurrency-test.mjs.
+  // The refusal is built inside the section and printed outside it, so nothing exits holding the lock.
+  const taken = withLock(ROOT, () => {
+    const now = new Date();
+    const { rows } = readClaims(ROOT, now.getTime());
+    const held = activeWriters(rows, repo);
 
-  if (held.length >= rp.writers) {
-    const lines = [
-      'claim take REFUSED — the repo is at its writer cap',
-      `  ${repo} allows ${rp.writers} writer(s) and ${held.length} active claim(s) hold it now:`,
-    ];
-    for (const h of held) {
-      lines.push(`    "${h.chat}" [${h.session || 'no session field'}] opened ${h.ageH.toFixed(1)}h ago`);
+    if (held.length >= rp.writers) {
+      const lines = [
+        'claim take REFUSED — the repo is at its writer cap',
+        `  ${repo} allows ${rp.writers} writer(s) and ${held.length} active claim(s) hold it now:`,
+      ];
+      for (const h of held) {
+        lines.push(`    "${h.chat}" [${h.session || 'no session field'}] opened ${h.ageH.toFixed(1)}h ago`);
+      }
+      lines.push('');
+      lines.push('  SOMEBODY MAY BE WRITING RIGHT NOW. This tool does not tell you to delete their line,');
+      lines.push('  and you should not: a claim is the only thing standing between two sessions and one');
+      lines.push('  file. Work a different repo, or ask the holder in session.');
+      lines.push(`  A claim older than ${CLAIM_ACTIVE_HOURS}h reads as STALE on the board and stops blocking on its own.`);
+      return { refused: lines };
     }
-    lines.push('');
-    lines.push('  SOMEBODY MAY BE WRITING RIGHT NOW. This tool does not tell you to delete their line,');
-    lines.push('  and you should not: a claim is the only thing standing between two sessions and one');
-    lines.push('  file. Work a different repo, or ask the holder in session.');
-    lines.push(`  A claim older than ${CLAIM_ACTIVE_HOURS}h reads as STALE on the board and stops blocking on its own.`);
-    die(lines);
-  }
 
-  const sweeps = activeSweeps(rows, repo);
-  for (const s of sweeps) {
+    const session = idArg ?? directId(chat, now);
+    const stamp = now.toISOString().replace(/\.\d+Z$/, 'Z');
+
+    // The comment block is the part that survives. A bare line with no reason is what produced the
+    // dead claims this seat hand-releases every board read.
+    const preamble = [
+      `# HAND-TAKEN ${localDate(now)} by \`claim take\`, NOT a lane-open. There is no brief and no worktree.`,
+      `# WHY: ${why}`,
+      '# Release it with: pandoras-router claim release --id ' + session,
+    ].join('\n');
+
+    const line = `${repo} | ${chat} | ${stamp} | ${session}`;
+    appendToClaims(ROOT, `${preamble}\n${line}`);
+    return { line, session, sweeps: activeSweeps(rows, repo) };
+  });
+  if (taken.refused) die(taken.refused);
+  const { line, session } = taken;
+
+  for (const s of taken.sweeps) {
     console.log(`note: a declared sweep "${s.sweep}" is active on ${s.repo} — not a writer, not blocking.`);
   }
-
-  const session = idArg ?? directId(chat, now);
-  const stamp = now.toISOString().replace(/\.\d+Z$/, 'Z');
-
-  // The comment block is the part that survives. A bare line with no reason is what produced the
-  // dead claims this seat hand-releases every board read.
-  const preamble = [
-    `# HAND-TAKEN ${localDate(now)} by \`claim take\`, NOT a lane-open. There is no brief and no worktree.`,
-    `# WHY: ${why}`,
-    '# Release it with: pandoras-router claim release --id ' + session,
-  ].join('\n');
-
-  const file = path.join(ROOT, '_handoffs', '_lanes', 'CLAIMS.md');
-  const before = fs.readFileSync(file, 'utf8');
-  fs.writeFileSync(file, before.endsWith('\n') ? `${before}${preamble}\n` : `${before}\n${preamble}\n`);
-  const line = appendClaim(ROOT, { repo, chat, stamp, session });
 
   console.log('claim TAKEN');
   console.log(`  ${line}`);
@@ -156,19 +163,24 @@ function release(args) {
   const id = arg(args, '--id');
   if (!id) die(['claim release REFUSED', '  --id is required.', '  usage: claim release --id <session id>']);
 
-  const removed = releaseClaim(ROOT, id);
+  // The release and the marker rewrite below are one locked section, so no take or open can land
+  // between them and have its line rewritten from a copy read before it existed.
+  const removed = withLock(ROOT, () => {
+    const out = releaseClaim(ROOT, id);
 
-  // The claim's own preamble carries a "Release it with: ... --id <id>" line. Left standing after the
-  // release it reads as a live instruction for a claim that no longer exists, which is exactly the
-  // kind of stale advice this seat spends its board reads cleaning up. The house convention in this
-  // file is that a released block STAYS as history and gains a RELEASED line, so do that: rewrite the
-  // instruction in place rather than deleting the block.
-  const file = path.join(ROOT, '_handoffs', '_lanes', 'CLAIMS.md');
-  const text = fs.readFileSync(file, 'utf8');
-  const marker = `# Release it with: pandoras-router claim release --id ${id}`;
-  if (text.includes(marker)) {
-    fs.writeFileSync(file, text.split(marker).join(`# RELEASED ${localDate(new Date())} by \`claim release --id ${id}\`. Not held any more.`));
-  }
+    // The claim's own preamble carries a "Release it with: ... --id <id>" line. Left standing after the
+    // release it reads as a live instruction for a claim that no longer exists, which is exactly the
+    // kind of stale advice this seat spends its board reads cleaning up. The house convention in this
+    // file is that a released block STAYS as history and gains a RELEASED line, so do that: rewrite the
+    // instruction in place rather than deleting the block.
+    const marker = `# Release it with: pandoras-router claim release --id ${id}`;
+    rewriteClaims(ROOT, (text) => ({
+      text: text.includes(marker)
+        ? text.split(marker).join(`# RELEASED ${localDate(new Date())} by \`claim release --id ${id}\`. Not held any more.`)
+        : text,
+    }));
+    return out;
+  });
 
   if (!removed.length) {
     console.log(`no claim line carries the 4th field "${id}" — nothing removed.`);
@@ -205,13 +217,19 @@ function list() {
 // ------------------------------------------------------------------ front door
 
 const [verb, ...rest] = process.argv.slice(2);
-if (verb === 'take') take(rest);
-else if (verb === 'release') release(rest);
-else if (verb === 'list') list();
-else {
-  console.error('usage: pandoras-router claim <take|release|list> [args]');
-  console.error('  take <repo> --as "<chat title>" --why "<one line>"');
-  console.error('  release --id <session id>');
-  console.error('  list');
-  process.exit(verb ? 2 : 0);
+try {
+  if (verb === 'take') take(rest);
+  else if (verb === 'release') release(rest);
+  else if (verb === 'list') list();
+  else {
+    console.error('usage: pandoras-router claim <take|release|list> [args]');
+    console.error('  take <repo> --as "<chat title>" --why "<one line>"');
+    console.error('  release --id <session id>');
+    console.error('  list');
+    process.exit(verb ? 2 : 0);
+  }
+} catch (e) {
+  // A lock held by a live process past the wait: print the refusal, which names the holder, not a stack.
+  if (e?.code === 'LOCK_HELD' || e?.code === 'LOCK_NO_STATE') die([e.message]);
+  throw e;
 }

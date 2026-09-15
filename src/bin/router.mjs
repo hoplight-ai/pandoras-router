@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // router.mjs — the one front door. Everything a dispatcher needs to route lanes is a subcommand
 // here, so nobody has to remember six script names or which one reads which file.
 //

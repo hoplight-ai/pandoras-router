@@ -1,3 +1,4 @@
+// @ts-check
 // alloc.mjs — the allocation decision, with no filesystem and no git in it.
 //
 // Everything that decides which lanes may fire together lives here so it can be unit-tested against
@@ -22,16 +23,18 @@ import { laneIdFor, slugFor, branchFor, worktreeFor, sessionIdFor, reportFor, to
  * @param {Array} o.briefs        parsed briefs, live only
  * @param {object} o.policy       from loadPolicy()
  * @param {Array}  o.claims       claim rows
- * @param {Map}    o.repoState    repo -> { dirty, exists }
- * @param {Set}    o.existingReports  report filenames already on the bridge
- * @param {Array}  o.openLanes    OPEN records from LANES.md, which is the only place an active
+ * @param {Map}    [o.repoState]  repo -> { dirty, exists }
+ * @param {Set}    [o.existingReports]  report filenames already on the bridge
+ * @param {Array}  [o.openLanes]  OPEN records from LANES.md, which is the only place an active
  *                                lane's file scope is written down; a claim line has no such field.
- * @param {Array}  o.closedLanes  the SAME folded ledger, read for its CLOSE records. Defaults to
+ * @param {Array}  [o.closedLanes] the SAME folded ledger, read for its CLOSE records. Defaults to
  *                                `openLanes` because `readLanes` returns one array holding both, and
  *                                a second read of one file is a second chance for the two to
  *                                disagree. Named separately so the two uses are legible.
- * @param {number} o.limit
- * @param {string|null} o.as      this dispatch's name, for OWNED-ELSEWHERE
+ * @param {Set<string>} [o.orphanedLanes]  lane names the caller judged orphaned; they hold no scope
+ * @param {number} [o.limit]
+ * @param {string|null} [o.as]    this dispatch's name, for OWNED-ELSEWHERE
+ * @param {string|null} [o.seat]  this dispatch's bare seat name, matched to POLICY.md's dispatch column
  * @param {string} o.date         YYYY-MM-DD
  */
 export function allocate({ briefs, policy, claims, repoState = new Map(), existingReports = new Set(), openLanes = [], closedLanes = openLanes, orphanedLanes = new Set(), limit = 8, as = null, seat = null, date }) {

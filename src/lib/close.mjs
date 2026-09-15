@@ -1,3 +1,4 @@
+// @ts-check
 // close.mjs — the five gate decisions, with no git and no network in them, so they can be tested.
 //
 // GATE 1 IS CONTENT-VERIFIED, NOT ANCESTRY-VERIFIED, and that distinction is the whole reason this
@@ -25,7 +26,8 @@
 // findStatus/STATUS_WORDS: the ONE parser that locates a report's STATUS word, shared with
 // the status-word sweep (via lib/verdict.mjs) so overrideReportStatusWord below can never rewrite a
 // line that parser does not itself read as the status. See overrideReportStatusWord's own comment.
-import { findStatus, STATUS_WORDS } from './report-check.mjs';
+import { findStatus, checkText, STATUS_WORDS } from './report-check.mjs';
+import { STRING_YES_CAVEAT } from './liveness.mjs';
 
 export const ABSENT = null;
 
@@ -161,7 +163,11 @@ export function surfaceReach(touched, surfaces, repo = 'this repo') {
  * Precedence, and each step is a different fact about the deployment:
  *
  *   yes   some probed url served the proof string. The string is already known novel in this
- *         branch's diff, so this cannot pass on stale bytes.
+ *         branch's diff, which narrows what a match can mean but does not prove the served build
+ *         is the merged commit: a cached response, a stale build that happens to carry the string,
+ *         or an unrelated route that echoes it all read the same from here. So the yes labels
+ *         itself best-effort evidence (STRING_YES_CAVEAT, shared with lib/liveness.mjs); the sha
+ *         form's yes is the one that says deployment identity.
  *   skip  a probe hit an auth wall (401/403) and no other probe found the string. ONE WALLED
  *         URL IS ENOUGH, even beside a dozen that answered 200, and that ordering was got wrong
  *         first: a lane changed one gated page alongside twelve public files, and grading the
@@ -182,7 +188,7 @@ export function liveStringVerdict({ results, proof, mode, dropped = 0 }) {
   const r = results ?? [];
   const tail = dropped ? ` NOTE: ${dropped} further changed file(s) were not probed — this close caps the probe list, and the cap is printed rather than hidden.` : '';
   const hit = r.find((x) => x.hasProof);
-  if (hit) return { value: 'yes', why: `${hit.url} is serving "${proof}", a string this branch introduced.${tail}` };
+  if (hit) return { value: 'yes', why: `${hit.url} is serving "${proof}", a string this branch introduced. ${STRING_YES_CAVEAT}${tail}` };
   const served = r.filter((x) => x.status === 200);
   const walled = r.filter((x) => x.status === 401 || x.status === 403);
   if (walled.length)
@@ -521,6 +527,85 @@ export function zeroCommitScopeVerdict({ declaredNone, scope }) {
 }
 
 /**
+ * GATE 7 AS THE CLOSE DRIVER GRADES IT.
+ *
+ * THE DEFECT THIS CLOSES (DRIVER1, 2026-09-14, found by the gate-matrix lane). The ledger stores
+ * `Touches: none` as an empty scope, and scopeCompliance reads an empty scope as undeclared, so a
+ * lane that promised to write no file and then committed some graded `n/a`, a pass. That is the
+ * one declaration whose breach is the easiest to see, and the allocator had let that lane run beside
+ * every other lane in the repo on the strength of it.
+ *
+ *   declaredNone, nothing touched     yes (zeroCommitScopeVerdict, unchanged)
+ *   declaredNone, paths touched       no, every path named (ALWAYS_IN_SCOPE paths excepted, the same
+ *                                     allowance scopeCompliance gives a declared scope)
+ *   a real scope, nothing touched     skip (zeroCommitScopeVerdict, unchanged)
+ *   otherwise                         scopeCompliance, unchanged
+ *
+ * @param {{touched:string[], scope:string[], declaredNone?:boolean}} p
+ * @returns {{value:string, breaches:string[], note:string}}
+ */
+export function inScopeVerdict({ touched = [], scope = [], declaredNone }) {
+  if (declaredNone) {
+    const breaches = touched.filter((p) => !ALWAYS_IN_SCOPE.has(p));
+    if (!breaches.length) return zeroCommitScopeVerdict({ declaredNone: true, scope });
+    return {
+      value: 'no',
+      breaches,
+      note: `this lane declared Touches: none and the branch touched ${breaches.length} path(s): ${breaches.slice(0, 8).join(', ')}${breaches.length > 8 ? ` (+${breaches.length - 8} more)` : ''}. The allocator let it run beside every other lane in the repo on the strength of that declaration; check those files against other open lanes before merging anything further.`,
+    };
+  }
+  if (!touched.length && declaredNone !== undefined) return zeroCommitScopeVerdict({ declaredNone: false, scope });
+  return scopeCompliance(touched, scope);
+}
+
+/**
+ * WHICH COMMITS GATE 7 MEASURES.
+ *
+ * THE DEFECT THIS CLOSES (DRIVER1, 2026-09-14, found by the gate-matrix lane). The driver diffed from
+ * merge-base(origin/main, branch). Once the branch is merged, that merge base IS the branch tip, the
+ * diff is empty, and a lane with a real declared scope graded `skip`: a landed lane could not close
+ * DONE on in-scope at all, and a lane that breached its scope and then landed was never measured.
+ *
+ * THE RULE.
+ *   the merge base is behind the tip   diff from the merge base, unchanged. This is the lane's own
+ *                                      net change, and after a fresh-base merge (`git merge
+ *                                      origin/main` in the lane) it still excludes what neighbours
+ *                                      landed on main in the meantime.
+ *   merged, or no merge base, and a    WALK from the base recorded at OPEN: the paths the lane's own
+ *   base was recorded at OPEN          commits changed, `log --no-merges --first-parent
+ *                                      <recorded>..<branch>`. The branch is never moved by a landing
+ *                                      (src/bin/lane-land.mjs), so its first-parent line is the lane's.
+ *   merged, nothing recorded           diff from the merge base, which is empty, and the note says so;
+ *                                      the zero-commit reading then grades it skip, not a pass.
+ *   neither                            nothing to measure.
+ *
+ * WHY NOT A PLAIN DIFF FROM THE RECORDED BASE, which is what the finding proposed. A lane that brought
+ * main in before landing (the fresh-base rule requires exactly that) carries every file a neighbour
+ * landed since OPEN in `diff <recorded>..<branch>`, and gate 7 would name those files as this lane's
+ * breaches. That trades a false skip for a false refusal. The first-parent walk reads only the lane's
+ * own commits. Its cost: an edit made only inside a merge commit's conflict resolution is not
+ * counted on a merged branch. The same walk is what the private workspace close measures gate 7 with.
+ *
+ * @param {{recordedBase?:string|null, mergeBase?:string|null, branchTip?:string|null}} p
+ * @returns {{method:'diff'|'walk'|'none', from:string|null, note:string}}
+ */
+export function scopeDiffPlan({ recordedBase = null, mergeBase = null, branchTip = null }) {
+  const collapsed = Boolean(mergeBase) && Boolean(branchTip) && mergeBase === branchTip;
+  if (mergeBase && !collapsed) return { method: 'diff', from: mergeBase, note: `diffed from the merge base ${String(mergeBase).slice(0, 8)}` };
+  if (recordedBase) {
+    return {
+      method: 'walk',
+      from: recordedBase,
+      note: collapsed
+        ? `the branch is already merged (its merge base is its own tip), so the lane's own commits since the base recorded at OPEN ${String(recordedBase).slice(0, 8)} were measured instead`
+        : `no merge base could be computed, so the lane's own commits since the base recorded at OPEN ${String(recordedBase).slice(0, 8)} were measured instead`,
+    };
+  }
+  if (mergeBase) return { method: 'diff', from: mergeBase, note: 'the branch is already merged and no base was recorded at OPEN, so the diff from the merge base is empty and nothing the lane touched could be measured' };
+  return { method: 'none', from: null, note: 'no merge base and no base recorded at OPEN, so nothing the lane touched could be measured' };
+}
+
+/**
  * WHERE GATE 7'S COMMIT WALK STARTS.
  *
  * The walk is `rev-list --no-merges --first-parent <base>..<tip>`. That is right while the tip is
@@ -654,6 +739,13 @@ export function landingGapVerdict({ ahead, land = null, isInBranch }) {
  * since 2026-09-04 one excuse: a gap made only of this branch's own landing (`gap`, from
  * landingGapVerdict) counts as containing the head, because the landing merge carries nothing the
  * branch did not already build. Grandfathered lanes get the observation as prose, not as a failure.
+ *
+ * @param {object} o
+ * @param {boolean} o.containsMainHead   origin/main's head is an ancestor of the branch tip
+ * @param {boolean} o.grandfathered      the lane predates the rule
+ * @param {number|string|null} [o.behindBy]  commits on origin/main the branch lacks; absent when not measured
+ * @param {{contained:boolean, why:string, unexplained:Array<string>}|null} [o.gap]  from landingGapVerdict
+ * @returns {{fresh:boolean, why:string}}
  */
 export function freshBaseVerdict({ containsMainHead, grandfathered, behindBy, gap = null }) {
   if (containsMainHead) return { fresh: true, why: 'the branch contains origin/main\'s head, so this build is a build of the combined result' };
@@ -668,6 +760,44 @@ export function freshBaseVerdict({ containsMainHead, grandfathered, behindBy, ga
 }
 
 /**
+ * THE DRIVER'S READING OF THE FRESH-BASE RULE (GREEN1, 2026-09-14). freshBaseVerdict existed and
+ * the close driver never called it, so a build on a base that predated a neighbour's landing still
+ * graded `green=yes`. The driver now measures one thing before it builds, the output of
+ * `git rev-list --parents <branch>..<base>` (every commit the base has that the branch lacks, each
+ * line a sha followed by its parents), and hands it here.
+ *
+ * An empty list is a branch that contains the base's head. A non-empty list goes through
+ * landingGapVerdict, so the branch's own landing merge is excused and nothing else is, and then
+ * through freshBaseVerdict. `listed` null means git could not answer: `fresh` is null, which the
+ * driver records as a skip, because an unmeasured base is not a fresh one.
+ *
+ * @param {object} o
+ * @param {string|null} o.listed                 rev-list --parents output, or null when git failed
+ * @param {{tip?:string, merge?:string}|null} [o.land]  the lane's LAND record, merge sha resolved
+ * @param {(sha:string)=>boolean} o.isInBranch   is this commit an ancestor of the branch tip
+ * @param {boolean} [o.grandfathered]
+ * @param {string} [o.base]                      the ref name to say in the reason, e.g. main
+ * @returns {{fresh:boolean|null, why:string, missing:string[]}}
+ */
+export function freshBaseFromRevList({ listed, land = null, isInBranch, grandfathered = false, base = 'origin/main' }) {
+  const say = (s) => (base === 'origin/main' ? s : s.split('origin/main').join(base));
+  if (listed === null || listed === undefined) {
+    return { fresh: null, why: say('git could not list the commits on origin/main that the branch lacks, so whether this build is a build of the combined result was not measured'), missing: [] };
+  }
+  const ahead = String(listed).split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+    const [sha, ...parents] = l.split(/\s+/);
+    return { sha, parents };
+  });
+  if (!ahead.length) {
+    const v = freshBaseVerdict({ containsMainHead: true, grandfathered });
+    return { fresh: v.fresh, why: say(v.why), missing: [] };
+  }
+  const gap = landingGapVerdict({ ahead, land, isInBranch });
+  const v = freshBaseVerdict({ containsMainHead: false, grandfathered, behindBy: ahead.length, gap });
+  return { fresh: v.fresh, why: say(v.why), missing: v.fresh ? [] : gap.unexplained };
+}
+
+/**
  * ANCESTRY-LIVE for gate 3's sha form (2026-08-22, pre-cap-raise). Equality was correct at one
  * writer: the site serves your sha or your deploy did not land. At several writers the LAST push
  * wins the alias, so a lane whose work landed fine reads `no` whenever a neighbour deployed after
@@ -678,10 +808,45 @@ export function freshBaseVerdict({ containsMainHead, grandfathered, behindBy, ga
  */
 export function liveShaVerdict({ served, sha, isAncestor, servedKnown }) {
   if (!served) return { value: 'no', why: 'the deployed surface answered without a release field, so the build cannot identify itself' };
-  if (served === sha) return { value: 'yes', why: `release=${served} matches the branch head exactly` };
-  if (isAncestor) return { value: 'yes', why: `release=${served.slice(0, 8)} CONTAINS this branch's head ${sha.slice(0, 8)} — a later lane deployed on top of this one, which is the normal case with concurrent writers. This lane's work is in the live build.` };
+  if (served === sha) return { value: 'yes', why: `deployment identity: release=${served} matches the branch head exactly. The deployment named its own commit, so this cannot have passed on stale bytes.` };
+  if (isAncestor) return { value: 'yes', why: `deployment identity: release=${served.slice(0, 8)} CONTAINS this branch's head ${sha.slice(0, 8)} — a later lane deployed on top of this one, which is the normal case with concurrent writers. This lane's work is in the live build, and the deployment named its own commit, so this cannot have passed on stale bytes.` };
   if (servedKnown === false) return { value: 'skip', why: `SKIP: the served release ${served.slice(0, 8)} is not a commit this checkout knows, so ancestry could not be measured. Run \`git fetch origin\` in the repo and re-close. Nothing was measured, and a skip is not a pass.` };
   return { value: 'no', why: `release=${served.slice(0, 8)} neither matches nor contains this branch's head ${sha.slice(0, 8)} — the alias is serving a build without this lane's work. Check for a stacked deploy before re-firing anything.` };
+}
+
+/**
+ * WHICH PROOF RAN, in the words every live verdict leads with (VERIFY1, 2026-09-14). The close
+ * driver dispatches on the policy's `verify` column, and a reader of the ledger or the printed row
+ * must be able to tell a string match from a commit echo without opening POLICY.md, so the form and
+ * the row that named it head the sentence.
+ *
+ * @param {{kind:string, path?:string, field?:string, header?:string, name?:string}|null} verify
+ * @returns {string}
+ */
+export function verifyFormLabel(verify) {
+  const v = verify ?? { kind: 'none' };
+  if (v.kind === 'sha') return `sha form (verify sha:${v.path}:${v.field})`;
+  if (v.kind === 'header') return `header form (verify header:${v.path}:${v.header})`;
+  if (v.kind === 'string') return 'string form (verify string, the liveness row\'s URL-and-string probe)';
+  if (v.kind === 'script') return `script form (verify script:${v.name})`;
+  if (v.kind === 'none') return 'none form (verify none)';
+  return `unknown form (${v.kind})`;
+}
+
+/**
+ * THE COMMIT A COMMIT-ECHO PROOF COMPARES AGAINST. The merge commit a LAND record names, when the
+ * checkout knows it; otherwise the lane branch's tip. Either is contained by any later deploy built
+ * on top of it, which is what lets the sha and header forms pass a lane a neighbour deployed after.
+ * A squash-merged lane with no LAND record has a tip main does not contain, and grades no rather
+ * than a guess; recording the landing fixes it. Pure: the resolved commits are handed in.
+ *
+ * @param {{landMerge?:string|null, branchTip?:string|null}} p
+ * @returns {{sha:string|null, source:string}}
+ */
+export function laneCommitFor({ landMerge = null, branchTip = null }) {
+  if (landMerge) return { sha: landMerge, source: 'the merge commit the LAND record names' };
+  if (branchTip) return { sha: branchTip, source: 'the lane branch tip' };
+  return { sha: null, source: 'no LAND record and no branch tip this checkout can resolve' };
 }
 
 // `exempt` joins `n/a` as a pass. Both mean "this gate does not apply here"; the difference is that
@@ -1053,6 +1218,47 @@ export function doneReportRefusal({
 }
 
 /**
+ * THE CLOSE DRIVER'S REPORT REFUSAL: report-check's reading of the report, handed to
+ * doneReportRefusal with the report's presence stated.
+ *
+ * THE DEFECT THIS REPLACES (DRIVER1, 2026-09-14, found by the gate-matrix lane). src/bin/close.mjs
+ * called doneReportRefusal directly, passing the status word, a hand-written Evidence regex and
+ * `doneHonestWarn: false`, but never `present` or `statusFound`. doneReportRefusal returns ok at once
+ * unless told a report is present, so none of the three refusals could fire on a real close, and the
+ * honesty flag could not have fired even if presence had been passed.
+ *
+ * THE SHAPE is the private workspace close's reportRefusalFor, so the two cannot disagree: presence
+ * is true whenever report text was read; the status, Evidence and done-honest answers are
+ * report-check's own checks (checkText), never a second parser; the overrule is overrulesReportCheck.
+ * A file report-check reads as a consumed brief rather than a lane report is never refused, and says
+ * so in a note, because a check that cannot apply must not pass silently either.
+ *
+ * Pure apart from report-check's date fallback, which stats `file` only when its name carries no
+ * date.
+ *
+ * @param {{file:string, text:string|null}} p
+ * @returns {{ok:boolean, condition:string|null, why:string|null, note?:string}}
+ */
+export function closeReportRefusal({ file, text }) {
+  if (text === null || text === undefined) return doneReportRefusal({ file, present: false });
+  const checked = checkText(text, file);
+  if (checked.kind !== 'report')
+    return { ok: true, condition: null, why: null, note: `NOTE: report-check reads ${file} as a ${checked.kind}, not a lane report, so the report rules were not applied to it.` };
+  const by = Object.fromEntries(checked.checks.map((c) => [c.name, c]));
+  return doneReportRefusal({
+    file,
+    present: true,
+    statusFound: by.status?.status === 'PASS',
+    statusWord: checked.statusWord,
+    evidencePresent: by.evidence?.status === 'PASS',
+    doneHonestWarn: by['done-honest']?.status === 'WARN',
+    doneHonestSummary: by['done-honest']?.summary ?? '',
+    doneHonestDetail: by['done-honest']?.detail ?? [],
+    overruled: overrulesReportCheck(text),
+  });
+}
+
+/**
  * Does this report answer report-check's objection in the L6 form?
  *
  * The overrule line names the reviewer, and this is deliberately literal about it: `overruled:
@@ -1246,7 +1452,17 @@ export function verifyProdVerdict({ code, tail = '' }) {
   };
 }
 
-/** The deployment status route as a fallback probe. Ancestry, exactly as the `sha:` form of gate 3 grades it. */
+/**
+ * The deployment status route as a fallback probe. Ancestry, exactly as the `sha:` form of gate 3 grades it.
+ *
+ * @param {object} o
+ * @param {number|null} o.status        the route's HTTP status, or null when nothing answered
+ * @param {string|null} [o.served]      the release field it answered with; absent when it answered none
+ * @param {string} o.sha                the branch head
+ * @param {boolean} [o.isAncestor]
+ * @param {boolean|null} [o.servedKnown]
+ * @returns {{value:string, why:string}}
+ */
 export function obsProbeVerdict({ status, served, sha, isAncestor = false, servedKnown = null }) {
   if (status !== 200 || !served)
     return {

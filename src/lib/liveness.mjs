@@ -1,3 +1,4 @@
+// @ts-check
 // liveness.mjs — did the merged change actually reach the deployed surface?
 //
 // THIS IS THE GATE NOTHING ELSE RUNS. Every other check in a close asks a question about the
@@ -46,6 +47,21 @@
 //   no       the surface answered, and it is NOT serving this build — a real red
 //   skipped  nothing was measured, for a named reason
 //
+// ── THREE FORMS, AND THE VERDICT SAYS WHICH ONE IT IS ──────────────────────────────────────────
+//
+// A yes is not one thing. Ranked by what it proves:
+//   sha       the deployment echoes its own commit in a JSON body (POLICY.md `verify: sha:...`,
+//             graded in close.mjs's liveShaVerdict). The only proof that cannot pass on stale
+//             bytes, because an older build does not contain this branch's commit. Its yes says
+//             "deployment identity".
+//   header    the same echo, read from ONE response header (`verify: header:<path>:<header-name>`,
+//             parsed and probed at the bottom of this file). Same strength, same sentence.
+//   string    a marker found in a body (this file's probeLiveness, and the close's string verdict).
+//             A cached response, a stale build that happens to carry the string, or an unrelated
+//             route all pass it. Its yes says "best-effort evidence" and names what it did not prove.
+// The value column stays yes/no/skipped; only the sentence beside it changes. Lead with sha
+// wherever the surface can echo its commit; the string form is for surfaces that cannot.
+//
 // ── THE NETWORK CALL IS INJECTED ───────────────────────────────────────────────────────────────
 //
 // `fetchImpl` defaults to the global fetch and is an argument, so the whole gate is testable
@@ -57,6 +73,17 @@ export const LIVE_NO = 'no';
 export const LIVE_SKIPPED = 'skipped';
 
 const NOT_A_PASS = 'Nothing was measured, and a skip is not a pass.';
+
+/**
+ * THE STRING FORM GRADES ITSELF. A marker found in a body is best-effort evidence: a cached
+ * response, a stale build that happens to carry the string, or an unrelated route that echoes it
+ * all read the same from here. Only a deployment echoing its own commit (the sha form, or the
+ * header form below) proves that the served build IS the merged commit. The verdict value does
+ * not change — yes is yes — but every string `yes` says which kind of yes it is, where a reader
+ * grades, not only in a comment nobody opens. Exported so the close's own string verdict can say
+ * the identical sentence rather than a paraphrase that drifts.
+ */
+export const STRING_YES_CAVEAT = 'This is best-effort evidence: a body match does not prove that the served build is the merged commit (a cached response, a stale build carrying the string, or an unrelated route reads the same); only a sha or header echo of the commit proves which build is serving.';
 
 /** Only environment variables whose names start with this may be sent by a probe. */
 export const DEFAULT_ENV_PREFIX = 'PANDORAS_';
@@ -86,7 +113,7 @@ export function livenessHeaders(auth, env = process.env, envPrefix = DEFAULT_ENV
     // The env var holds `user:password`. Already-encoded values are accepted as-is so an operator
     // who stored a full `Basic xxx` header is not silently double-encoded.
     const header = /^basic\s/i.test(value) ? value : `Basic ${Buffer.from(value, 'utf8').toString('base64')}`;
-    return { headers: { authorization: header }, missing: null };
+    return { headers: { authorization: header }, missing: null, refused: null };
   }
   if (auth.kind === 'cookie') return { headers: { cookie: value }, missing: null, refused: null };
   if (auth.kind === 'header') return { headers: { [auth.header.toLowerCase()]: value }, missing: null, refused: null };
@@ -144,10 +171,10 @@ export function gradeLiveness({ status, body, expect, url, error = null }) {
     };
   }
   if (!expect) {
-    return { value: LIVE_YES, why: `${url} answered 200, and this repo's policy asks for nothing more than a 200.` };
+    return { value: LIVE_YES, why: `${url} answered 200, and this repo's policy asks for nothing more than a 200. ${STRING_YES_CAVEAT}` };
   }
   if (String(body ?? '').includes(expect)) {
-    return { value: LIVE_YES, why: `${url} answered 200 and carried "${expect}".` };
+    return { value: LIVE_YES, why: `${url} answered 200 and carried "${expect}". ${STRING_YES_CAVEAT}` };
   }
   return {
     value: LIVE_NO,
@@ -158,8 +185,8 @@ export function gradeLiveness({ status, body, expect, url, error = null }) {
 /**
  * Probe one repo's deployed surface.
  *
- * @param {object} o
- * @param {object|null} o.config     a parsed liveness row, or null when the repo declares none
+ * @param {object} [o]
+ * @param {object|null} [o.config]   a parsed liveness row, or null when the repo declares none
  * @param {string} [o.repo]          for the SKIPPED sentence when there is no config
  * @param {object} [o.env]           where credential NAMES are resolved
  * @param {Function} [o.fetchImpl]   injected for testing; defaults to the global fetch
@@ -215,4 +242,376 @@ export async function probeLiveness({ config, repo = 'this repo', env = process.
   }
 
   return gradeLiveness({ status, body, expect: config.expect, url: config.url, error });
+}
+
+// ── THE HEADER ECHO FORM ───────────────────────────────────────────────────────────────────────
+//
+// `verify: header:<path>:<header-name>` in POLICY.md's repos table. GET url+path, read ONE
+// response header, pass when its value contains the lane's merge commit. It is the sha form for a
+// deployment that names its release in a header rather than a JSON body (a CDN's release tag, a
+// platform's deployment id header, an app that sets one on purpose), and it carries the sha form's
+// strength: a stale build does not know a commit it does not contain, so this cannot pass on stale
+// bytes. That is the whole reason it exists beside the string form rather than as a variant of it.
+//
+// THE BODY IS NEVER READ. Not capped, not sampled, not touched: a body that happens to carry the
+// sha counts for nothing here, because the row said "header" and a proof that quietly widens what
+// it accepts is a proof that quietly weakens. Reading zero bytes is inside the 1 MB cap by
+// construction. The redirect rule and the credential rule are the liveness probe's, unchanged.
+//
+// WHERE THE PARSER LIVES. The header form is parsed HERE, beside its probe, and policy.mjs's
+// parseVerify calls parseVerifyHeader for it (VERIFY1, 2026-09-14), so a `header:` row loads from
+// POLICY.md and the close driver dispatches on it. `parseVerifyWithHeader`, the one-line adapter
+// that stood in while the policy parser did not accept the form, is kept for callers that import it;
+// it now gives the same answer as parseVerify alone.
+// The `auth` column's `header:<Name>:<ENV_VAR>` is a different column and never reaches this parser.
+
+/** A header NAME per RFC 7230: a token, no spaces, no colons. Anything else is refused, never trimmed into shape. */
+const HEADER_TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+/** The fewest hex characters a header may abbreviate the commit to and still be read as naming it. */
+export const HEADER_SHA_MIN_PREFIX = 7;
+
+/**
+ * Parse `header:<path>:<header-name>`. Returns null for any form that is not this one, so an
+ * adapter can fall through to the policy parser; THROWS on a malformed header form, in the policy
+ * parser's own voice, because a row that half-parses would probe a path nobody wrote.
+ *
+ * @returns {{kind:'header', path:string, header:string}|null}
+ */
+export function parseVerifyHeader(repo, raw) {
+  const v = String(raw ?? '').trim();
+  if (!v.startsWith('header:')) return null;
+  const rest = v.slice(7);
+  const i = rest.lastIndexOf(':');
+  const path = i >= 0 ? rest.slice(0, i) : '';
+  const header = i >= 0 ? rest.slice(i + 1) : '';
+  if (!path.startsWith('/') || !header || !HEADER_TOKEN.test(header))
+    throw new Error(`policy: repo "${repo}" verify "${v}" must be header:<path>:<header-name> (an absolute path, then one header name with no spaces)`);
+  return { kind: 'header', path, header: header.toLowerCase() };
+}
+
+/** The one-line adapter: this form first, every other form to the policy parser it is handed. */
+export const parseVerifyWithHeader = (repo, raw, parseVerify) => parseVerifyHeader(repo, raw) ?? parseVerify(repo, raw);
+
+/**
+ * Does a header value name this commit? Containment, the same rule the sha form applies to its
+ * body field: the full sha anywhere in the value passes, and so does a prefix of at least
+ * HEADER_SHA_MIN_PREFIX hex characters, because platforms abbreviate. Hex is case-insensitive.
+ *
+ * @returns {{named:boolean, abbreviated:boolean}}
+ */
+export function headerNamesCommit(headerValue, sha) {
+  const value = String(Array.isArray(headerValue) ? headerValue.join(', ') : headerValue ?? '').toLowerCase();
+  const full = String(sha ?? '').trim().toLowerCase();
+  if (!value || !full) return { named: false, abbreviated: false };
+  if (value.includes(full)) return { named: true, abbreviated: false };
+  // The longest prefix of the sha that the value carries, provided it is long enough to be an identity
+  // and sits on a hex boundary (so `abc1234` inside `abc12345678` of some OTHER commit is not credited).
+  for (let n = Math.min(full.length - 1, 40); n >= HEADER_SHA_MIN_PREFIX; n--) {
+    const prefix = full.slice(0, n);
+    const at = value.indexOf(prefix);
+    if (at === -1) continue;
+    const after = value[at + n];
+    if (after === undefined || !/[0-9a-f]/.test(after)) return { named: true, abbreviated: true };
+  }
+  return { named: false, abbreviated: false };
+}
+
+/**
+ * The transport half every commit-echo grade shares: an unreachable surface is a skip, a redirect
+ * or a non-200 is a no. Returns null on a 200, which is where each form's own reading starts.
+ *
+ * @returns {{value:string, why:string}|null}
+ */
+function echoTransportVerdict({ status, url, error }) {
+  if (error) {
+    return {
+      value: LIVE_SKIPPED,
+      why: `SKIPPED: ${url} could not be reached (${error}). An unreachable surface is unmeasured, not failed — the deployment may be fine and the network may not be. ${NOT_A_PASS}`,
+    };
+  }
+  if (status >= 300 && status < 400) {
+    return {
+      value: LIVE_NO,
+      why: `${url} answered ${status}, a redirect, which the probe did not follow because a credential was attached and a redirect would carry it to a host the policy did not name. Point the verify path at the final URL. This is a red, not a skip: something answered and it was not this build.`,
+    };
+  }
+  if (status !== 200) {
+    const gated = status === 401 || status === 403;
+    return {
+      value: LIVE_NO,
+      why: gated
+        ? `${url} answered ${status}. The probe carried whatever credential the policy named and was still refused, so either the credential is wrong or the surface is not serving. This is a red, not a skip: something answered and it was not this build.`
+        : `${url} answered ${status}, not 200. The surface is reachable and it is not serving this build.`,
+    };
+  }
+  return null;
+}
+
+/** Hex runs long enough to be a commit id, on hex boundaries, in the order a header carries them. */
+function hexTokens(value) {
+  return [...String(value ?? '').matchAll(/(?<![0-9a-f])[0-9a-f]{7,40}(?![0-9a-f])/gi)].map((m) => m[0].toLowerCase());
+}
+
+/**
+ * Grade one header-echo probe. Pure — no network, no clock.
+ *
+ * `ancestry`, when supplied, is how a header naming a LATER commit still passes: the close driver
+ * hands in a function that asks git whether a named commit contains the lane's commit, the same
+ * containment rule the sha form applies, so a neighbour deploying on top does not turn a landed lane
+ * red. Without it the grade is the direct match alone, as it always was.
+ *
+ * @param {{status:number, headerValue:string|string[]|null, header:string, sha:string, url:string, error?:string|null,
+ *          ancestry?:((served:string)=>{isAncestor:boolean, servedKnown:boolean|null})|null}} p
+ * @returns {{value:string, why:string}}
+ */
+export function gradeHeaderEcho({ status, headerValue, header, sha, url, error = null, ancestry = null }) {
+  const transport = echoTransportVerdict({ status, url, error });
+  if (transport) return transport;
+  const raw = Array.isArray(headerValue) ? headerValue.join(', ') : headerValue;
+  if (raw === null || raw === undefined || String(raw).trim() === '') {
+    return {
+      value: LIVE_NO,
+      why: `${url} answered 200 with no \`${header}\` header, so the build cannot identify itself. The body was not read and would not count: the row asked for a header echo, and a surface that stops naming its release has stopped proving anything.`,
+    };
+  }
+  const shown = String(raw).slice(0, 80);
+  const { named, abbreviated } = headerNamesCommit(raw, sha);
+  if (named) {
+    return {
+      value: LIVE_YES,
+      why: `deployment identity: ${url} answered 200 and its \`${header}\` header (${shown}) names the merge commit ${String(sha).slice(0, 8)}${abbreviated ? ', abbreviated' : ''}. The deployment named its own commit, so this cannot have passed on stale bytes. The body was not read.`,
+    };
+  }
+  if (typeof ancestry === 'function') {
+    const tokens = hexTokens(raw);
+    let known = false;
+    for (const t of tokens) {
+      const a = ancestry(t) ?? { isAncestor: false, servedKnown: null };
+      if (a.isAncestor) {
+        return {
+          value: LIVE_YES,
+          why: `deployment identity: ${url} answered 200 and its \`${header}\` header (${shown}) names ${t.slice(0, 8)}, a commit that CONTAINS the merge commit ${String(sha).slice(0, 8)}. A later deploy landed on top of this lane, which is the normal case with concurrent writers; the deployment named its own commit, so this cannot have passed on stale bytes. The body was not read.`,
+        };
+      }
+      if (a.servedKnown !== false) known = true;
+    }
+    if (tokens.length && !known) {
+      return {
+        value: LIVE_SKIPPED,
+        why: `SKIPPED: ${url} answered 200 and its \`${header}\` header (${shown}) names no commit this checkout knows, so whether it contains the merge commit ${String(sha).slice(0, 8)} could not be measured. Run \`git fetch origin\` in the repo and close again. ${NOT_A_PASS}`,
+      };
+    }
+  }
+  return {
+    value: LIVE_NO,
+    why: `${url} answered 200 and its \`${header}\` header (${shown}) does NOT contain the merge commit ${String(sha).slice(0, 8)}. The alias is serving a build that names another commit — the deploy has not landed, or a neighbour's deploy replaced it. The body was not read and would not count.`,
+  };
+}
+
+/**
+ * Probe one repo's header echo.
+ *
+ * @param {object} [o]
+ * @param {{url:string, verify:{kind:string,path:string,header:string}, auth?:object|null, timeoutMs?:number}} [o.config]
+ *                                  the repo's url and parsed verify row; auth and timeout as the liveness row spells them.
+ *                                  A missing url, or a verify kind other than 'header', is a SKIP.
+ * @param {string}   [o.sha]        the lane's merge commit; with none there is nothing to compare and the probe is not sent
+ * @param {string}   [o.repo]
+ * @param {object}   [o.env]
+ * @param {Function} [o.fetchImpl]
+ * @param {string}   [o.envPrefix]
+ * @param {((served:string)=>{isAncestor:boolean, servedKnown:boolean|null})|null} [o.ancestry]
+ *                                  asks whether a commit the header names contains `sha`; see gradeHeaderEcho
+ * @returns {Promise<{value:string, why:string}>}
+ */
+export async function probeHeaderEcho({ config, sha, repo = 'this repo', env = process.env, fetchImpl = globalThis.fetch, envPrefix = DEFAULT_ENV_PREFIX, ancestry = null } = {}) {
+  const verify = config?.verify;
+  if (!config?.url || verify?.kind !== 'header') {
+    return {
+      value: LIVE_SKIPPED,
+      why: `SKIPPED: ${repo} has no url and header verify row to probe, so nothing was asked. ${NOT_A_PASS}`,
+    };
+  }
+  const url = `${String(config.url).replace(/\/+$/, '')}${verify.path}`;
+  if (!String(sha ?? '').trim()) {
+    return {
+      value: LIVE_SKIPPED,
+      why: `SKIPPED: no merge commit was supplied for ${repo}, so there is nothing for the \`${verify.header}\` header at ${url} to be compared against and the probe was not sent. ${NOT_A_PASS}`,
+    };
+  }
+  const pre = echoPreflight({ config, url, repo, env, fetchImpl, envPrefix });
+  if (pre.skip) return pre.skip;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), pre.timeoutMs);
+  let status = 0;
+  let headerValue = null;
+  let error = null;
+  try {
+    const redirect = config.auth ? 'manual' : 'follow';
+    const res = await fetchImpl(url, { redirect, headers: pre.headers, signal: controller.signal });
+    status = res.status;
+    // Only the one header. `res.headers` is a Headers object on a real fetch and may be a plain
+    // object on an injected one; neither path reads the body.
+    const h = res.headers;
+    headerValue = typeof h?.get === 'function' ? h.get(verify.header) : (h?.[verify.header] ?? null);
+  } catch (e) {
+    error = e?.name === 'AbortError'
+      ? `no answer within ${pre.timeoutMs}ms`
+      : String(e?.message ?? e).slice(0, 120);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  return gradeHeaderEcho({ status, headerValue, header: verify.header, sha, url, error, ancestry });
+}
+
+/**
+ * The preflight both commit-echo probes share: a runtime with no fetch, a credential outside the
+ * probe prefix, and a credential that is unset are each a SKIP and the probe is not sent.
+ *
+ * @returns {{skip:{value:string, why:string}|null, headers:Record<string,string>, timeoutMs:number}}
+ */
+function echoPreflight({ config, url, repo, env, fetchImpl, envPrefix }) {
+  const timeoutMs = Number.isFinite(config.timeoutMs) && config.timeoutMs > 0 ? config.timeoutMs : 10000;
+  if (typeof fetchImpl !== 'function') {
+    return { skip: { value: LIVE_SKIPPED, why: `SKIPPED: no fetch implementation is available in this runtime, so ${url} was never asked. ${NOT_A_PASS}` }, headers: {}, timeoutMs };
+  }
+  const { headers, missing, refused } = livenessHeaders(config.auth, env, envPrefix);
+  if (refused) {
+    return { skip: { value: LIVE_SKIPPED, why: `SKIPPED: ${repo}'s row asks for ${config.auth.kind} auth from $${refused}, and a probe may only send a variable whose name starts with ${envPrefix}. That value was never read and the probe was NOT sent. Mint a ${envPrefix}-prefixed variable for this probe and name it in the row. ${NOT_A_PASS}` }, headers: {}, timeoutMs };
+  }
+  if (missing) {
+    return { skip: { value: LIVE_SKIPPED, why: `SKIPPED: ${repo}'s row asks for ${config.auth.kind} auth from $${missing}, and that variable is unset or empty. The probe was NOT sent bare, because grading the resulting 401 would measure the credential rather than the deployment. ${NOT_A_PASS}` }, headers: {}, timeoutMs };
+  }
+  return { skip: null, headers, timeoutMs };
+}
+
+// ── THE SHA ECHO FORM ──────────────────────────────────────────────────────────────────────────
+//
+// `verify: sha:<path>:<jsonField>`. GET url+path, parse the JSON body (read to BODY_CAP_BYTES), take
+// ONE field, and hand the commit it names to the sha verdict. The verdict is injected rather than
+// imported: the containment rule lives in close.mjs's liveShaVerdict, which imports this file, and
+// the close driver passes it in together with an `ancestry` function that asks git. With no verdict
+// supplied the grade is exact equality alone, and its sentence says so.
+//
+// A body that is not JSON, or a field that is absent, is a `no`: the surface answered and cannot
+// identify its build. The string form is never consulted, whatever the body carries.
+
+/** Read a field from a parsed body. A dotted name walks nested objects; nothing else is interpreted. */
+function readField(obj, field) {
+  let cur = obj;
+  for (const part of String(field).split('.')) {
+    if (cur === null || typeof cur !== 'object' || !(part in cur)) return null;
+    cur = cur[part];
+  }
+  return typeof cur === 'string' || typeof cur === 'number' ? String(cur).trim() || null : null;
+}
+
+/** Equality only: the grade used when no containment verdict is injected. */
+function exactShaVerdict({ served, sha }) {
+  if (!served) return { value: LIVE_NO, why: 'the deployed surface answered without a release field, so the build cannot identify itself' };
+  if (served === sha) return { value: LIVE_YES, why: `deployment identity: release=${served} matches the merge commit exactly. The deployment named its own commit, so this cannot have passed on stale bytes.` };
+  return { value: LIVE_NO, why: `release=${String(served).slice(0, 8)} is not the merge commit ${String(sha).slice(0, 8)}, and no containment check was supplied to this probe.` };
+}
+
+/**
+ * Grade one sha-echo probe. Pure — no network, no clock; `verdict` and `ancestry` are functions of
+ * the served value only.
+ *
+ * @param {{status:number, body:string, field:string, sha:string, url:string, error?:string|null,
+ *          verdict?:Function|null, ancestry?:Function|null}} p
+ * @returns {{value:string, why:string}}
+ */
+export function gradeShaEcho({ status, body, field, sha, url, error = null, verdict = null, ancestry = null }) {
+  const transport = echoTransportVerdict({ status, url, error });
+  if (transport) return transport;
+  let parsed;
+  try {
+    parsed = JSON.parse(String(body ?? ''));
+  } catch {
+    return { value: LIVE_NO, why: `${url} answered 200 with a body that is not JSON, so there is no \`${field}\` field and the build cannot identify itself. The body was not searched for a string: the row asked for a sha echo.` };
+  }
+  const served = readField(parsed, field);
+  const a = served && typeof ancestry === 'function' ? (ancestry(served) ?? {}) : {};
+  const grade = typeof verdict === 'function' ? verdict : exactShaVerdict;
+  const v = grade({ served, sha, isAncestor: Boolean(a.isAncestor), servedKnown: a.servedKnown ?? null });
+  const value = v.value === 'skip' ? LIVE_SKIPPED : v.value;
+  return { value, why: `${url} field \`${field}\`: ${v.why}` };
+}
+
+/**
+ * Probe one repo's sha echo.
+ *
+ * @param {object} [o]
+ * @param {{url:string, verify:{kind:string,path:string,field:string}, auth?:object|null, timeoutMs?:number}} [o.config]
+ * @param {string}   [o.sha]        the lane's merge commit; with none the probe is not sent
+ * @param {string}   [o.repo]
+ * @param {object}   [o.env]
+ * @param {Function} [o.fetchImpl]
+ * @param {string}   [o.envPrefix]
+ * @param {Function|null} [o.verdict]   ({served, sha, isAncestor, servedKnown}) => {value, why}
+ * @param {Function|null} [o.ancestry]  (served) => {isAncestor, servedKnown}
+ * @returns {Promise<{value:string, why:string}>}
+ */
+export async function probeShaEcho({ config, sha, repo = 'this repo', env = process.env, fetchImpl = globalThis.fetch, envPrefix = DEFAULT_ENV_PREFIX, verdict = null, ancestry = null } = {}) {
+  const verify = config?.verify;
+  if (!config?.url || verify?.kind !== 'sha') {
+    return { value: LIVE_SKIPPED, why: `SKIPPED: ${repo} has no url and sha verify row to probe, so nothing was asked. ${NOT_A_PASS}` };
+  }
+  const url = `${String(config.url).replace(/\/+$/, '')}${verify.path}`;
+  if (!String(sha ?? '').trim()) {
+    return { value: LIVE_SKIPPED, why: `SKIPPED: no merge commit was supplied for ${repo}, so there is nothing for the \`${verify.field}\` field at ${url} to be compared against and the probe was not sent. ${NOT_A_PASS}` };
+  }
+  const pre = echoPreflight({ config, url, repo, env, fetchImpl, envPrefix });
+  if (pre.skip) return pre.skip;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), pre.timeoutMs);
+  let status = 0;
+  let body = '';
+  let error = null;
+  try {
+    const redirect = config.auth ? 'manual' : 'follow';
+    const res = await fetchImpl(url, { redirect, headers: pre.headers, signal: controller.signal });
+    status = res.status;
+    body = status === 200 ? await readBodyCapped(res, BODY_CAP_BYTES) : '';
+  } catch (e) {
+    error = e?.name === 'AbortError'
+      ? `no answer within ${pre.timeoutMs}ms`
+      : String(e?.message ?? e).slice(0, 120);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  return gradeShaEcho({ status, body, field: verify.field, sha, url, error, verdict, ancestry });
+}
+
+// ── THE SCRIPT FORM ────────────────────────────────────────────────────────────────────────────
+//
+// `verify: script:<name>`. The close runs `npm run <name>` in the lane's own checkout and grades the
+// exit code and nothing else. The running is the driver's (a child process); the grade is here, pure.
+// A script the checkout's package.json does not declare is a SKIP naming it, never a `no`: npm would
+// exit non-zero on "Missing script", and grading that would blame the deployment for a policy row.
+
+/**
+ * @param {{name:string, declared:boolean, code:number|null, signal?:string|null, error?:string|null, tail?:string, checkout?:string}} p
+ * @returns {{value:string, why:string}}
+ */
+export function scriptProofVerdict({ name, declared, code, signal = null, error = null, tail = '', checkout = 'the lane checkout' }) {
+  if (!declared) {
+    return { value: LIVE_SKIPPED, why: `SKIPPED: the policy names script:${name}, and ${checkout} declares no \`${name}\` script in its package.json, so nothing was run. ${NOT_A_PASS}` };
+  }
+  if (error || (code === null && !signal)) {
+    return { value: LIVE_SKIPPED, why: `SKIPPED: \`npm run ${name}\` could not be started in ${checkout} (${String(error ?? 'no exit code').slice(0, 120)}). ${NOT_A_PASS}` };
+  }
+  if (code === null) {
+    return { value: LIVE_SKIPPED, why: `SKIPPED: \`npm run ${name}\` in ${checkout} was stopped by ${signal} before it exited, so it has no exit code to grade. ${NOT_A_PASS}` };
+  }
+  const last = String(tail).trim().split('\n').pop()?.slice(0, 200) || '(no output)';
+  if (code === 0) {
+    return { value: LIVE_YES, why: `\`npm run ${name}\` exited 0 in ${checkout}. The grade is that exit code and nothing else: this proves what the script checks, no more.` };
+  }
+  return { value: LIVE_NO, why: `\`npm run ${name}\` exited ${code} in ${checkout}, so the repo's own proof FAILED. The grade is that exit code. Its last line: ${last}` };
 }

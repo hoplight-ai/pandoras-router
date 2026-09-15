@@ -114,10 +114,9 @@
 cd pandoras-router
 npm test</code></pre>
 
-  <p>479 assertions, all passing. 183 of them assert a refusal, so deleting a guard
-  turns them red rather than quietly widening what the tool allows. Each suite prints its own
-  count as it runs: the allocator and scope suite reports 131 of its 309 as red-proof, the
-  liveness gate 12 of 26, and the two shell guards 31 of 46.</p>
+  <p>Every suite prints its own assertion count as it runs, and how many assert a refusal, so
+  deleting a guard turns them red rather than quietly widening what the tool allows. CI runs the
+  same command on Node 22 and 24 across Linux, macOS and Windows.</p>
 
   <p>Now build a throwaway workspace out of <code>examples/</code>. A workspace is any directory
   holding a <code>_handoffs/</code> bridge and your repos:</p>
@@ -221,7 +220,7 @@ PANDORAS_ROOT=/tmp/pandoras-demo node src/bin/router.mjs alloc</code></pre>
   because it needs a lane's declared scope and its open timestamp recorded at the moment of
   dispatch, which no PR or CI fact carries.</p>
 
-  <p>Across a source-level read of 13 comparable tools, none did both scope-before-dispatch and
+  <p>Of the fourteen tools compared, none did both scope-before-dispatch and
   verify-after, and none checked that a merged change is actually live at a URL. That gap, rather
   than either half on its own, is what this fills.</p>
 

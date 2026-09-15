@@ -1,3 +1,4 @@
+// @ts-check
 // gitread.mjs — read-only git. Every call here is a query; nothing in this file writes a ref, a
 // commit, an index or a working tree. Callers that need to write do it themselves, in the open,
 // where it can be read.
@@ -97,6 +98,15 @@ export function classifyLock({ present, ageMs }) {
  * A NON-empty stale lock is a mid-write snapshot of somebody's
  * index — moving it would still be reversible, but it is odd enough that a machine must not treat
  * it as routine. It is reported loudly and left for a human.
+ *
+ * @param {object} o
+ * @param {boolean} o.present
+ * @param {number} o.ageMs
+ * @param {number} o.bytes
+ * @param {boolean} o.heldOpen
+ * @param {boolean|null} [o.holderIsGit]  only read when heldOpen; absent or null means the holder
+ *   could not be identified, which is a blocker, never "git is working"
+ * @returns {{action:string, why:string}}
  */
 export function sweepDecision({ present, ageMs, bytes, heldOpen, holderIsGit }) {
   if (!present) return { action: 'none', why: 'no lock file' };

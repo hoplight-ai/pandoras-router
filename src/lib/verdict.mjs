@@ -1,3 +1,4 @@
+// @ts-check
 // lib/verdict.mjs — the pure half of Gov DELTA1: read by verdict-audit.mjs (the audit + rename
 // CLI) and by the session-start sweep, so both share one definition of "the prefix lies."
 //

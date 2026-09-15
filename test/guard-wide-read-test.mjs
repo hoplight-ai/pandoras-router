@@ -132,4 +132,114 @@ console.log(`\nWIDE-READ GATE ASSERTIONS  ${pass}/${pass + failures.length} pass
 console.log('  DENY assertions: 3 — each asserts a REFUSAL, so removing the guard turns them red.');
 console.log('  ALLOW assertions: the rest — each asserts the gate stays OUT of the way, so');
 console.log('  widening the refusal turns them red. Both directions are load-bearing.');
-if (failures.length) throw new Error(`guard-wide-read-test.mjs: ${failures.length} assertion(s) failed.`);
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+// THE MEASUREMENT BEHIND THE THRESHOLD: hooks/measure-wide-read.mjs
+//
+// The hook's threshold table is quoted from this script's output. If the script drifts, the table
+// becomes a memory again, so the script is asserted here against a fixture transcript of known
+// sizes: three Reads with results (2,000 bytes, 8,000 bytes, and 20,000 bytes with a range named),
+// one Grep result it must ignore, one Read with no result, one Read outside the window, one whole
+// transcript file older than the window, and a prompt line whose text must never be printed.
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+const MEASURE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'hooks', 'measure-wide-read.mjs');
+if (!fs.existsSync(MEASURE)) {
+  throw new Error('guard-wide-read-test.mjs: hooks/measure-wide-read.mjs is missing. The threshold table has no measurement behind it.');
+}
+
+let mpass = 0;
+const mfail = [];
+function mcheck(cond, name) { if (cond) mpass++; else mfail.push(name); }
+
+const mroot = fs.mkdtempSync(path.join(os.tmpdir(), 'wideread-measure-'));
+const project = path.join(mroot, 'project-folder-name-that-must-not-print');
+fs.mkdirSync(project);
+const SECRET_PATHS = ['/fixture/secret-alpha.md', '/fixture/secret-beta.md', '/fixture/secret-gamma.md'];
+const PROMPT = 'FIXTURE PROMPT TEXT THAT MUST NEVER BE PRINTED';
+const recent = new Date(Date.now() - 3600 * 1000).toISOString();
+const ancient = '2001-01-01T00:00:00.000Z';
+
+const use = (id, input, ts) => JSON.stringify({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Read', input }] } });
+const result = (id, content, ts) => JSON.stringify({ type: 'user', timestamp: ts, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content }] } });
+
+const sessionFile = path.join(project, 'session-file-name-that-must-not-print.jsonl');
+fs.writeFileSync(sessionFile, [
+  JSON.stringify({ type: 'user', timestamp: recent, message: { role: 'user', content: PROMPT } }),
+  use('ru1', { file_path: SECRET_PATHS[0] }, recent),
+  result('ru1', 'a'.repeat(2000), recent),
+  'this line is not json and must be skipped',
+  use('ru2', { file_path: SECRET_PATHS[1] }, recent),
+  result('ru2', [{ type: 'text', text: 'b'.repeat(8000) }], recent),
+  use('ru3', { file_path: SECRET_PATHS[2], offset: 1 }, recent),
+  result('ru3', 'c'.repeat(20000), recent),
+  JSON.stringify({ type: 'assistant', timestamp: recent, message: { role: 'assistant', content: [{ type: 'tool_use', id: 'g1', name: 'Grep', input: { pattern: 'x' } }] } }),
+  result('g1', 'g'.repeat(50000), recent),
+  use('ru4-never-answered', { file_path: SECRET_PATHS[0] }, recent),
+  use('ru5', { file_path: SECRET_PATHS[1] }, ancient),
+  result('ru5', 'z'.repeat(999999), ancient),
+  '',
+].join('\n'));
+
+const oldFile = path.join(project, 'older-than-the-window.jsonl');
+fs.writeFileSync(oldFile, [use('old1', { file_path: SECRET_PATHS[0] }, ancient), result('old1', 'q', ancient), ''].join('\n'));
+fs.utimesSync(oldFile, new Date(ancient), new Date(ancient));
+
+function measure(args) {
+  const r = spawnSync(process.execPath, [MEASURE, ...args], { encoding: 'utf8' });
+  return { code: r.status, out: (r.stdout || '') + (r.stderr || '') };
+}
+
+{
+  const { code, out } = measure([mroot, '--days', '7']);
+  mcheck(code === 0, '[measure --days 7] exits 0');
+  mcheck(out.includes('transcript files: 1 scanned, 1 skipped as last written before the window'),
+    '[measure --days 7] counts one file scanned and one skipped by mtime');
+  mcheck(out.includes('reads with a result: 3 over 1 calendar day (UTC), 1 more found but outside the window'),
+    '[measure --days 7] counts exactly three reads with results, and one outside the window');
+  mcheck(out.includes('no range named: 2 of those reads (66.7%), carrying 33.3% of read bytes'),
+    '[measure --days 7] the no-range share and its byte share');
+  mcheck(out.includes('p50 8,000 bytes (about 2,000 tokens), p90 20,000 bytes (about 5,000 tokens)'),
+    '[measure --days 7] p50 is the middle read and tokens are bytes/4');
+  mcheck(/T=1,000 tok\s+33\.3% of reads\s+26\.7%\s+66\.7%/.test(out),
+    '[measure --days 7] at T=1,000: one of three refused, 8,000 of 30,000 bytes covered, two of three over');
+  mcheck(/T=3,000 tok\s+0\.0% of reads\s+0\.0%\s+33\.3%/.test(out),
+    '[measure --days 7] RED-PROOF at T=3,000: the 20,000-byte read named a range, so nothing is refused');
+  mcheck(out.includes('covered is not saved'), '[measure --days 7] prints the covered-is-not-saved disclaimer');
+  const leaked = [...SECRET_PATHS, 'project-folder-name-that-must-not-print', 'session-file-name-that-must-not-print']
+    .filter((s) => out.includes(s));
+  mcheck(!leaked.length, `[measure --days 7] RED-PROOF prints no transcript path or project name (leaked: ${leaked.join(', ')})`);
+  mcheck(!out.includes(PROMPT), '[measure --days 7] RED-PROOF prints no prompt text');
+}
+{
+  const { code, out } = measure([mroot, '--since', '2000-01-01']);
+  mcheck(code === 0 && out.includes('reads with a result: 5 over 2 calendar days (UTC)') && out.includes('transcript files: 2 scanned'),
+    '[measure --since 2000-01-01] widens the window to the two 2001 reads, one in each file');
+}
+{
+  const { code, out } = measure([mroot, '--since', '2000-01-01', '--until', '2020-01-01']);
+  mcheck(code === 0 && out.includes('reads with a result: 2 over 1 calendar day (UTC), 3 more found but outside the window'),
+    '[measure --since --until] a bounded window keeps only the two 2001 reads and reports the three recent ones as outside it');
+}
+{
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'wideread-empty-'));
+  const { code, out } = measure([empty, '--days', '7']);
+  mcheck(code === 0 && out.includes('reads with a result: 0') && out.includes('no Read results to measure'),
+    '[measure on an empty directory] says so plainly and invents no numbers');
+  fs.rmSync(empty, { recursive: true, force: true });
+}
+{
+  const { code, out } = measure([path.join(mroot, 'does-not-exist'), '--days', '7']);
+  mcheck(code === 2 && out.includes('missing or unreadable'),
+    '[measure on a missing directory] exits 2 and says the directory is missing');
+}
+
+fs.rmSync(mroot, { recursive: true, force: true });
+
+for (const f of mfail) console.log(`FAIL  ${f}`);
+console.log(`WIDE-READ MEASUREMENT ASSERTIONS  ${mpass}/${mpass + mfail.length} pass, ${mfail.length} fail`);
+console.log('  3 of them are RED-PROOF: a ranged read is never refused, and no path, project name or prompt text is printed.');
+
+if (failures.length || mfail.length) {
+  throw new Error(`guard-wide-read-test.mjs: ${failures.length + mfail.length} assertion(s) failed.`);
+}

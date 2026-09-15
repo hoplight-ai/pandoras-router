@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // report-check.mjs — mechanize the report rules in the project rules file §"your closing summary
 // block is a claim, not a receipt" and the standing orders.
 //
@@ -118,6 +119,7 @@ function findStatus(lines) {
       if (m) return { word: m[1], line: i, source: 'fenced report block', region: fenced };
     }
   }
+  /** @type {Array<[RegExp, string]>} pattern that declares a status, and the name of that form */
   const declarers = [
     [/STATUS\s*(\*\*)?\s*[:=]/i, 'STATUS: line'],
     [/\bREPORT\b/, 'REPORT header line'],
@@ -232,8 +234,16 @@ function isBrief(lines) {
 }
 
 function checkFile(file) {
+  return checkText(fs.readFileSync(path.resolve(file), 'utf8'), file);
+}
+
+// The same checks over text the caller already holds. The close driver reads the report once for
+// its findings and side-file gates, and hands that same text here, so the refusal and the gates can
+// never judge two different reads of one file. `file` still names the report: its date comes from
+// the filename first, and only a name with no date falls back to a stat.
+function checkText(text, file) {
   const abs = path.resolve(file);
-  const lines = fs.readFileSync(abs, 'utf8').split('\n');
+  const lines = String(text ?? '').split('\n');
   const { date, via } = fileDate(abs, lines);
 
   if (isBrief(lines)) {
@@ -384,7 +394,7 @@ export function collect(target) {
 // findStatus and STATUS_WORDS are exported so lib/close.mjs's status-override (Gov PHI1,
 // 2026-09-09) can locate and rewrite the exact line this file itself would read — never a second,
 // hand-rolled parser that could drift from the one the verdict sweep actually runs.
-export { checkFile, findStatus, STATUS_WORDS };
+export { checkFile, checkText, findStatus, STATUS_WORDS };
 
 const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invokedDirectly) {

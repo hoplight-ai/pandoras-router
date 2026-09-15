@@ -1,3 +1,4 @@
+// @ts-check
 // atomic.mjs — the pure half of scripts/apply-atomic.mjs, so the replacement order can be tested
 // without a git repository, a patch, or a single byte written to disk.
 //

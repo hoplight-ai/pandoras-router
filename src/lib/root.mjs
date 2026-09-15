@@ -1,3 +1,4 @@
+// @ts-check
 // root.mjs — the one key under which the workspace root itself appears in the policy table.
 //
 // A workspace root is the directory holding `_handoffs/` and the repos. It is usually not a git

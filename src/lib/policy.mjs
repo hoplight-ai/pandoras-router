@@ -1,3 +1,4 @@
+// @ts-check
 // policy.mjs — the per-repo facts, loaded from _handoffs/_lanes/POLICY.md.
 //
 // A repo that is not in the table routes nothing. Guessing a deploy style or a verification method
@@ -8,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readTable } from './md-table.mjs';
 import { setModels } from './briefs.mjs';
+import { parseVerifyHeader } from './liveness.mjs';
 
 export function policyFile(root) {
   return path.join(root, '_handoffs', '_lanes', 'POLICY.md');
@@ -92,6 +94,7 @@ export function loadPolicy(root) {
       exclusive: [],
       surfaces: [],
       liveness: null,
+      env: null,
     });
   }
 
@@ -165,6 +168,23 @@ export function loadPolicy(root) {
     }
   }
 
+  // ENV (Router ENV1, 2026-09-14). A per-repo allowlist of `.env.local` variable NAMES — never
+  // values, only names, and this file never sees a value — that `lane-open` copies into a fresh
+  // worktree. OPTIONAL, in the same shape as `exclusive` and `traps` above: a repo absent from this
+  // table gets today's behaviour, unchanged — the whole file is copied. A repo present here gets
+  // ONLY the named keys; see copyEnvFile in bin/lane-open.mjs for the disk half and what happens to
+  // a listed key the source file lacks. `keys` is a space-separated list read straight off the row.
+  if (/<!--\s*table:\s*env\s*-->/i.test(text)) {
+    for (const e of readTable(text, 'env')) {
+      const rec = repos.get(e.repo);
+      if (!rec) throw new Error(`policy: env table names "${e.repo}", which is not in the repos table`);
+      if (rec.env) throw new Error(`policy: repo "${e.repo}" appears twice in the env table`);
+      const keys = String(e.keys ?? '').trim().split(/\s+/).filter(Boolean);
+      if (!keys.length) throw new Error(`policy: env table has a row for "${e.repo}" with no keys`);
+      rec.env = keys;
+    }
+  }
+
   // MODELS (optional). The friendly-name-to-exact-id roster a brief's `Model:` line resolves
   // against. Absent means an EMPTY roster and every model line reads as unrecognised.
   setModels(parseModels(text));
@@ -232,8 +252,21 @@ export function parseLiveness(repo, row) {
   return { repo, url, expect, auth, timeoutMs };
 }
 
-// verify DSL. `sha:` is the only form that cannot pass on stale bytes, which is why it is preferred
-// wherever the surface can echo its own commit.
+// verify DSL. The close driver dispatches on the kind this returns (gateLive in bin/close.mjs), so the
+// column is authoritative: whatever form a row names is the proof the close runs, and nothing else.
+//
+//   sha:<path>:<jsonField>      GET url+path, read one JSON field, pass when it names a commit that
+//                               contains the lane's commit. Cannot pass on stale bytes.
+//   header:<path>:<headerName>  the same echo read from one response header. Parsed by
+//                               parseVerifyHeader in lib/liveness.mjs, beside its probe.
+//   string                      the liveness row's URL-and-string probe. Best-effort evidence.
+//   script:<name>               `npm run <name>` in the lane's checkout, graded by exit code.
+//   none                        nothing to prove; the gate records n/a.
+//
+// AN UNKNOWN FORM THROWS AT LOAD, naming every valid form. A row the driver cannot dispatch on must
+// never reach the close, because the only thing a close could do with it is guess.
+export const VERIFY_FORMS = ['sha:<path>:<jsonField>', 'header:<path>:<headerName>', 'string', 'script:<name>', 'none'];
+
 export function parseVerify(repo, raw) {
   const v = String(raw ?? '').trim();
   if (v === 'none' || v === '-') return { kind: 'none' };
@@ -241,11 +274,19 @@ export function parseVerify(repo, raw) {
   if (v.startsWith('sha:')) {
     const rest = v.slice(4);
     const i = rest.lastIndexOf(':');
-    if (i < 1) throw new Error(`policy: repo "${repo}" verify "${v}" must be sha:<path>:<jsonfield>`);
-    return { kind: 'sha', path: rest.slice(0, i), field: rest.slice(i + 1) };
+    const p = i >= 0 ? rest.slice(0, i) : '';
+    const field = i >= 0 ? rest.slice(i + 1) : '';
+    if (!p.startsWith('/') || !field) throw new Error(`policy: repo "${repo}" verify "${v}" must be sha:<path>:<jsonField> (an absolute path, then one JSON field name)`);
+    return { kind: 'sha', path: p, field };
   }
-  if (v.startsWith('script:')) return { kind: 'script', name: v.slice(7) };
-  throw new Error(`policy: repo "${repo}" has verify "${v}"; must be sha:<path>:<field>, string, script:<name>, or none`);
+  const header = parseVerifyHeader(repo, v);
+  if (header) return header;
+  if (v.startsWith('script:')) {
+    const name = v.slice(7).trim();
+    if (!name || /\s/.test(name)) throw new Error(`policy: repo "${repo}" verify "${v}" must be script:<name> (one npm script name, no spaces)`);
+    return { kind: 'script', name };
+  }
+  throw new Error(`policy: repo "${repo}" has verify "${v}"; must be one of ${VERIFY_FORMS.join(', ')}`);
 }
 
 export function repoPolicy(policy, repo) {

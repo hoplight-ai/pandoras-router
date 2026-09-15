@@ -1,3 +1,4 @@
+// @ts-check
 // md-table.mjs — read a markdown table that is tagged with an HTML comment marker.
 //
 // WHY A MARKER AND NOT "the first table after the heading". Headings get reworded. A policy file
@@ -28,9 +29,15 @@ export function stripCell(s) {
 }
 
 /**
+ * One table row. Every column is a string; `__line` is the row's 0-based line offset counted from
+ * the text that follows the marker, not a line number in the file.
+ * @typedef {Record<string,string> & {__line:number}} TableRow
+ */
+
+/**
  * @param {string} text  the whole markdown file
  * @param {string} name  the marker name, e.g. "repos"
- * @returns {Array<Record<string,string>>}
+ * @returns {Array<TableRow>}  one record per row, keyed by lowercased column name
  */
 export function readTable(text, name) {
   const marker = new RegExp(`<!--\\s*table:\\s*${name}\\s*-->`, 'i');
@@ -54,7 +61,7 @@ export function readTable(text, name) {
     const line = lines[i];
     if (!line.trim().startsWith('|')) break;
     const cells = splitRow(line);
-    const rec = {};
+    const rec = /** @type {TableRow} */ ({});
     header.forEach((h, k) => {
       rec[h] = stripCell(cells[k] ?? '');
     });

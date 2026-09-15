@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-check
 // lane-alloc.mjs — turn the bridge into ready-to-fire lane cards.
 //
 // USAGE
@@ -13,7 +14,9 @@
 // report is called. Six facts, restated eight times a night, each restatement a chance to get one
 // wrong. They are data. This prints the data.
 //
-// It writes nothing. `lane-open.mjs` acts on a card; this only produces them.
+// It writes nothing. `lane-open.mjs` acts on a card; this only produces them. The one file it does
+// create is the state lock, `_handoffs/_lanes/.lock`, held for the length of two reads and removed
+// before it prints (see lib/lock.mjs).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -25,12 +28,12 @@ import { parseBrief } from '../lib/briefs.mjs';
 import { repoDirs, dirtyCount, git, repoDirFor } from '../lib/gitread.mjs';
 import { readLanes, orphanVerdict } from '../lib/lanes.mjs';
 import { allocate } from '../lib/alloc.mjs';
+import { withLock, lockDir } from '../lib/lock.mjs';
 import { todayLocal, reportNameForStatus } from '../lib/naming.mjs';
 
 // THE WORKSPACE ROOT is the directory holding `_handoffs/` and your repos. It is NEVER the
 // package's own install location, so it comes from $PANDORAS_ROOT or the current directory.
 const ROOT = path.resolve(process.env.PANDORAS_ROOT || process.cwd());
-const HANDOFFS = path.join(ROOT, '_handoffs');
 
 /**
  * Does this lane's branch still exist? UNKNOWN answers TRUE, deliberately.
@@ -52,11 +55,10 @@ function arg(args, name, dflt) {
   return i >= 0 && args[i + 1] ? args[i + 1] : dflt;
 }
 
-export function gather({ root = ROOT, as = null, seat = null, limit = 8, date = todayLocal() } = {}) {
+export function gather({ root = ROOT, as = null, seat = null, limit = 8, date = todayLocal(), lockRead = true } = {}) {
   const policy = loadPolicy(root);
   const vocab = loadPrefixes(root);
   const bridge = classifyBridge(root, vocab);
-  const claims = readClaims(root);
 
   const repos = repoDirs(root);
   const repoNames = new Set([...repos.map((r) => r.name), ...policy.repos.keys()]);
@@ -68,11 +70,18 @@ export function gather({ root = ROOT, as = null, seat = null, limit = 8, date = 
   const briefs = [];
   const documents = [];
   for (const entry of bridge.filter((b) => b.routes === 'yes')) {
-    const rec = parseBrief(path.join(HANDOFFS, entry.name), repoNames);
+    // `root`, not the module's ROOT: an in-process caller passing a root (the compare-and-set test)
+    // read every brief from whatever directory the process happened to start in.
+    const rec = parseBrief(path.join(root, '_handoffs', entry.name), repoNames);
     if (rec) briefs.push(rec);
     else documents.push(entry.name);
   }
-  const openLanes = readLanes(root);
+
+  // The claims, the ledger, the orphan probes and the allocation itself. Split out as decide() so
+  // lane-open can run exactly this half again INSIDE its lock, against the same briefs and policy,
+  // and compare the card it gets with the one it was shown. See decide() below.
+  const decided = decide({ root, policy, briefs, repoState, existingReports, limit, as, seat, date }, { lockRead });
+  const { claims, openLanes, orphans, cards, skipped, truncated } = decided;
 
   // ONLY `scope` PARTIALS ARE FIREABLE REMAINDERS (Gov DELTA1, 2026-09-06, step 4's other half).
   // A `partial-` file is always ROUTED as `remainder` per PREFIXES.md — that vocabulary is
@@ -100,6 +109,41 @@ export function gather({ root = ROOT, as = null, seat = null, limit = 8, date = 
     })
     .map((b) => remainderOf(root, b.name));
 
+  // `seat` is carried out of gather (additively) so the render can name the caller's
+  // own seat in the shelf line instead of printing a menu it has to read past. It was
+  // passed IN and dropped on the way out, which is why the line first rendered the placeholder
+  // even when --seat was given. `root`, `limit`, `date` and `existingReports` are carried out for the
+  // same additive reason: decide(r) needs them to re-run the allocation against the same inputs.
+  return { root, limit, date, existingReports, policy, vocab, bridge, claims, refused, briefs, documents, remainders, hiddenClerical, cards, skipped, truncated, repoState, openLanes, orphans, as, seat };
+}
+
+/**
+ * The half of gather() that depends on CLAIMS.md and LANES.md: read both, probe for orphans, allocate.
+ *
+ * READ UNDER THE STATE LOCK (CONC1, 2026-09-14). The two files are read in one locked section, so the
+ * claims and the ledger are a consistent pair: never a claim whose OPEN row has not landed yet, never
+ * a file caught mid-write. Every write is atomic now as well, so a lone read could not see a torn file
+ * anyway; the lock is what makes the PAIR consistent.
+ *
+ * CALLED A SECOND TIME BY lane-open, inside its own lock, as `decide(r)` with the result of an earlier
+ * gather(). The briefs, policy and repo state are reused from that read (they are not what two
+ * dispatchers race on); the claims and the ledger are read again. A card that fired now at the first
+ * read and is queued at the second is the race the reviewers found, caught.
+ *
+ * A workspace with no `_handoffs/_lanes/` directory has no claims or ledger to be consistent about,
+ * so it is read without the lock rather than refused: `alloc` has always printed a board there.
+ *
+ * `lockRead: false` is for ONE caller: lane-open's preview read, the one that finds the card before
+ * the compare-and-set. That read decides nothing that is written; the re-read inside the lock does.
+ * Unlocked, a dispatcher queued behind a busy lock still hears "your card is queued" at once, and the
+ * concurrency test can force the reviewers' exact interleaving (both opens read, then both try to
+ * write) instead of letting the lock serialize the reads and hide a missing compare-and-set.
+ */
+export function decide(r, { lockRead = true } = {}) {
+  const { root = ROOT, policy, briefs, repoState, existingReports, limit = 8, as = null, seat = null, date = todayLocal() } = r;
+  const read = () => ({ claims: readClaims(root), openLanes: readLanes(root) });
+  const { claims, openLanes } = lockRead && fs.existsSync(lockDir(root)) ? withLock(root, read) : read();
+
   // ORPHAN DETECTION lives HERE, not in alloc.mjs. The predicate is pure and unit-tested; the three
   // probes it needs (does the report exist, does the worktree exist, does the branch exist) all
   // touch the filesystem and git, which alloc.mjs deliberately cannot do — that is the whole reason
@@ -120,11 +164,7 @@ export function gather({ root = ROOT, as = null, seat = null, limit = 8, date = 
   const { cards, skipped, truncated } = allocate({
     briefs, policy, claims: claims.rows, repoState, existingReports, openLanes, orphanedLanes, limit, as, seat, date,
   });
-  // `seat` is carried out of gather (additively) so the render can name the caller's
-  // own seat in the shelf line instead of printing a menu it has to read past. It was
-  // passed IN and dropped on the way out, which is why the line first rendered the placeholder
-  // even when --seat was given.
-  return { policy, vocab, bridge, claims, refused, briefs, documents, remainders, hiddenClerical, cards, skipped, truncated, repoState, openLanes, orphans, as, seat };
+  return { ...r, claims, openLanes, orphans, cards, skipped, truncated };
 }
 
 function remainderOf(root, name) {
@@ -318,4 +358,12 @@ function main() {
   process.exit(args.includes('--strict') && fail ? 1 : 0);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (e) {
+    // A live holder past the wait: the refusal names it, and a stack trace would bury that.
+    if (e?.code === 'LOCK_HELD') { console.error(e.message); process.exit(1); }
+    throw e;
+  }
+}

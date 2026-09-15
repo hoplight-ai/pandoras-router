@@ -1,3 +1,4 @@
+// @ts-check
 // claims.mjs — one parser for _handoffs/_lanes/CLAIMS.md, shared by the board, the allocator,
 // lane-open and lane-close. There was one parser inside fire-board.mjs; four copies of it would
 // have drifted within a week and the board would have disagreed with the allocator about who holds
@@ -19,6 +20,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { withLock, writeStateFile } from './lock.mjs';
 
 // ---------------------------------------------------------------------------------------------
 // FIX 4 OF Ops BETA2 — "make the fourth field session-unique" — IS DEFERRED, WITH THE REASON.
@@ -158,18 +160,53 @@ export function sameLaneTwice(rows, repo) {
   return out;
 }
 
+/**
+ * Append raw text (one or more lines) to CLAIMS.md, under the state lock, atomically.
+ *
+ * The one write path every claim append goes through (CONC1, 2026-09-14). It was read, concatenate,
+ * writeFileSync, so two takes landing together each read the other's absence and both wrote. The
+ * read and the write now sit in one locked section and the write is a renamed temporary sibling.
+ * Re-entrant, so a caller that must decide and write in one section (claim take's writer-cap check,
+ * lane-open's compare-and-set) wraps its own withLock around this.
+ */
+export function appendToClaims(root, block) {
+  return withLock(root, () => {
+    const file = claimsFile(root);
+    const before = fs.readFileSync(file, 'utf8');
+    writeStateFile(root, file, before.endsWith('\n') ? `${before}${block}\n` : `${before}\n${block}\n`);
+  });
+}
+
 /** Append one claim line. Append-only by design: the root folder is not a git repo. */
 export function appendClaim(root, { repo, chat, stamp, session, note = null }) {
-  const file = claimsFile(root);
   const line = `${repo} | ${chat} | ${stamp} | ${session}`;
   // An optional comment ABOVE the claim, for anything a reader needs that the four fields cannot
   // carry. Every hand-written release in this file's history left a paragraph explaining itself and
   // every tool-driven one left nothing; this is how a tool leaves one. It can never be re-parsed as
   // a claim — the parser skips `#` before it looks at anything else.
   const block = note ? `# ${String(note).replace(/\n/g, ' ')}\n${line}` : line;
-  const before = fs.readFileSync(file, 'utf8');
-  fs.writeFileSync(file, before.endsWith('\n') ? `${before}${block}\n` : `${before}\n${block}\n`);
+  appendToClaims(root, block);
   return line;
+}
+
+/**
+ * Rewrite CLAIMS.md through a pure text transform, under the lock, atomically. The transform sees the
+ * file as it stands INSIDE the section, never a copy read before it. Returns whatever the transform
+ * returned alongside the new text; writes only when the text changed.
+ *
+ * @template {{text:string}} T
+ * @param {string} root
+ * @param {(text:string)=>T} transform
+ * @returns {T}
+ */
+export function rewriteClaims(root, transform) {
+  return withLock(root, () => {
+    const file = claimsFile(root);
+    const before = fs.readFileSync(file, 'utf8');
+    const out = transform(before);
+    if (out.text !== before) writeStateFile(root, file, out.text);
+    return out;
+  });
 }
 
 /**
@@ -189,7 +226,8 @@ export function appendClaim(root, { repo, chat, stamp, session, note = null }) {
  * re-parsed as an active claim — the parser skips `#` before it looks at anything else. That is what
  * makes this change strictly safer than the delete it replaces rather than merely different.
  *
- * @returns {Array<string>} the retired lines verbatim, so the caller can print them as the undo.
+ * @returns {{text:string, removed:Array<string>}} the new file text, and the retired lines verbatim
+ *   so the caller can print them as the undo.
  */
 export function releaseRewrite(text, session, stampedAt = new Date().toISOString()) {
   const removed = [];
@@ -209,8 +247,5 @@ export function releaseRewrite(text, session, stampedAt = new Date().toISOString
 }
 
 export function releaseClaim(root, session, stampedAt = new Date().toISOString()) {
-  const file = claimsFile(root);
-  const { text, removed } = releaseRewrite(fs.readFileSync(file, 'utf8'), session, stampedAt);
-  if (removed.length) fs.writeFileSync(file, text);
-  return removed;
+  return rewriteClaims(root, (text) => releaseRewrite(text, session, stampedAt)).removed;
 }

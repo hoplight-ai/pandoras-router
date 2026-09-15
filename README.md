@@ -30,14 +30,29 @@ From the repo root:
 npm test
 ```
 
-479 assertions, all passing. 183 of them assert a refusal, so deleting a guard turns them red
-rather than quietly widening what the tool allows. Each suite prints its own count as it runs:
-the allocator and scope suite reports 131 of its 309 as red-proof, the liveness gate 12 of 26,
-and the two shell guards 31 of 46, each of those fed the exact input that once walked past it.
+CI runs this same command on every push and pull request, on Node 22 and 24, on Ubuntu, macOS and
+Windows (six matrix cells, `.github/workflows/ci.yml`).
 
-The measurements quoted in the code's comments are from the tool's first four weeks in use on
-one operator's board: 511 lane closes across 25 working days, an average of 20 a day and a peak
-of 47, every one graded by these gates. That board is where each gate earned its place.
+Every suite prints its own assertion count as it runs, and how many of those are red-proof: each
+asserts a refusal, or that a weakening turns the suite red, so deleting a guard turns them red
+rather than quietly widening what the tool allows. The counts are not copied here because they grow
+with every change; the run is the record. The suites that carry the most weight are the allocator
+and scope suite, the shell guards (each fed the exact input that once walked past it), the liveness
+gate, the close driver's verify dispatch (the real close against a local server), the build gate
+(the real close against a fake npm), the lock's concurrency suite (two real processes racing), and
+the scope property suite (six properties over thousands of generated cases).
+
+The runner discovers its suites: every `*-test.mjs` file in `test/` runs, so a new suite needs no
+list edited. After the suites, `npm test` runs `npm run typecheck`, which holds the JSDoc in every
+file to the code it describes. The checker is fetched on first run through npx at pinned versions
+(TypeScript 6.0.3 and Node 22 type declarations) into npx's cache, so the package still has zero
+dependencies. Every file under `src/` and `hooks/` starts with `// @ts-check`, so an editor with
+Node types available checks it as you type.
+
+Most measurements quoted in the code's comments are from the tool's first four weeks in use on
+one operator's board: 511 lane closes across the 25 days from 18 August to the day it was
+published, 13 September 2026, an average of 20 a day and a peak of 47, every one graded by these
+gates. That board is where each gate earned its place.
 
 Now build a throwaway workspace out of `examples/`. A workspace is any directory holding a
 `_handoffs/` bridge and your repos:
@@ -64,7 +79,7 @@ One card now says FIRE NOW and the other says QUEUED, naming the lane it waits o
 paths where the two scopes intersect. That refusal is the whole product.
 
 `node src/bin/router.mjs` with no arguments lists the subcommands: `alloc`, `open`, `close`,
-`land`, `claim`, `apply`. `alloc` writes nothing; it only produces cards.
+`land`, `claim`, `apply`. `alloc` writes no record; it only produces cards.
 
 ## The two ideas
 
@@ -89,8 +104,11 @@ directory. Widening over-reports overlap, which costs a wait. Narrowing would un
 which costs somebody's work, so narrowing is never done.
 
 Some paths are global machinery rather than lane-local files: a numbered migrations directory, a
-deploy-all command that ships every function in one folder, `package.json`. A repo can declare
-those exclusive. A lane touching one holds that path alone and leaves the rest of the repo open.
+deploy-all command that ships every function in one folder, `package.json`. A lane touching one
+holds that path alone and leaves the rest of the repo open. 42 of them are exclusive in every repo
+with no configuration: the common lockfiles and package manifests across Node, Rust, Go, Python,
+Ruby, PHP, the JVM, Swift, Dart and Elixir, the usual migrations directories and schema files, and
+the router's own state directory. A repo can add more in its policy file; nothing can remove a built-in one.
 
 The declaration is written into the ledger when the lane opens, which is what lets a second lane
 be proved disjoint from a running one instead of assumed to collide. The close then checks every
@@ -104,8 +122,8 @@ An agent says it finished. `close` finds out. The shipped driver measures seven 
 | gate | what it measures |
 |---|---|
 | `merged` | every path the branch touched is byte-identical on main, compared blob by blob rather than by git ancestry, because a squash merge throws the fingerprints away |
-| `green` | `npm run build` in the lane's own checkout exited 0 |
-| `live` | the deployed surface was asked over HTTP and is serving this build |
+| `green` | the branch contains main's head, then `npm run build` in the lane's own checkout exited 0 inside the time limit |
+| `live` | the proof the repo's `verify` policy names ran and passed: a commit echo, a served string, or a script (see below for how strong each is) |
 | `renamed` | the brief carries a closed prefix, so the next dispatch does not fire it a second time |
 | `in-scope` | every path the branch touched is inside the scope the lane declared at open |
 | `findings` | every `FINDING:` line in the report carries a fix, a size and an owner |
@@ -115,25 +133,31 @@ DONE requires all of them. Anything else is PARTIAL with the failing gates named
 the report's own STATUS word, can only lower the grade: a report that says PARTIAL in its own
 words is never graded DONE by gates that happened to pass.
 
-`close` measures and prints; `close --apply` also renames the brief and appends the CLOSE record.
+Three things stop a close outright and write nothing, whatever the gates say: a report on the
+bridge with no STATUS word, a report that says DONE with no `Evidence:` line, and a report that
+says DONE beside a skipped or deferred step that no `overruled:` line answers. A close run before
+the report exists is not refused; that is the normal order.
+
+`close` measures and prints; `close --apply` also renames the brief, appends the CLOSE record and
+releases the lane's claim.
 
 ### The liveness gate, and skip is not a pass
 
 `live` is the gate none of those fourteen runs. Every other check asks a question about the
 repository, and all of them can be true while the page a person opens is last week's build. So the
-close issues a GET and reads what came back.
+close sends a GET and reads what came back.
 
-It returns three values, not two:
+It returns three values, not two, plus `n/a` for a repo whose policy names no proof:
 
-* `yes` the surface answered 200 and carried what it was supposed to carry.
-* `no` the surface answered and it is not serving this build. A real red.
+* `yes` the proof the policy named ran and passed.
+* `no` the surface answered and it is not serving this build, or the script failed. A real red.
 * `skipped` nothing was measured, for a named reason.
 
 A skip is never a pass, and the grader counts it as a failure. No URL in policy, a named
 credential that is unset, a socket that never answered: each of those measured nothing, and a gate
 that printed a soft dash for them would teach everybody to read the column as green. That is the
-failure mode which makes a liveness check worthless, so the value is the literal word `skipped`,
-the reason is always named, and the sentence "Nothing was measured, and a skip is not a pass" is
+failure mode which makes a liveness check worthless, so the probe's value is the literal word
+`skipped`, recorded in the ledger as `skip`, the reason is always named, and the sentence "Nothing was measured, and a skip is not a pass" is
 part of the output rather than a convention.
 
 Credentials are named, never stored. Policy carries the name of an environment variable; the value
@@ -141,8 +165,55 @@ is read at probe time and never printed, not in a verdict and not in an error. I
 empty the probe is not sent bare, because grading the resulting 401 would measure the credential
 rather than the deployment.
 
+The close runs the proof the repo's `verify` column in the policy names, and only that one. A sha
+echo (`sha:<path>:<jsonField>`) reads a JSON field in which the deployment names its own commit,
+and passes when that commit contains the lane's, so a neighbour deploying on top does not turn a
+landed lane red. A header echo (`header:<path>:<headerName>`) reads the same from one response
+header and never the body. Both say "deployment identity" beside their `yes`, and neither can pass
+on stale bytes. The string form (`string`) reads the repo's row in the `liveness` table, sends one
+GET, and passes on a 200 that carries the row's expected string; `--proof` swaps in a different
+string for one run. Its `yes` says in its own sentence that it is best-effort evidence, because a
+cached response, a stale build that carries the string, or an unrelated route reads the same.
+`script:<name>` runs that npm script in the lane's checkout and grades the exit code. `none`
+records n/a. Every verdict names the form that ran. When a sha or header endpoint cannot be reached
+or names no commit, the gate records that skip or no with the reason and never falls back to the
+string probe, and an unknown form refuses to load. The details, including 401s, redirects, CDN
+caches and the 1 MB body cap, are in [`docs/LIVENESS.md`](docs/LIVENESS.md).
+
 Full gate reference, including the three gates the grader supports but this driver records as
-unmeasured: [`site/gates.html`](site/gates.html).
+unmeasured: the gate matrix, [`docs/gates.json`](docs/gates.json), which
+`test/gate-matrix-test.mjs` holds to the code.
+
+## What this proves, and what it does not
+
+Disjoint declared scopes prove one thing: no two lanes running together will write the same file.
+The close then proves by measurement that a lane stayed inside what it declared, that its bytes are
+on main, that its own checkout builds, and that its URL answered with what the policy asked for.
+That is the whole claim.
+
+It does not prove that two lanes cannot break each other through something a file boundary does
+not carry: an API shape, a database schema, a generated file, a shared constant. Lane A renames a
+field on a server response and declares only the server file. Lane B changes the client that reads
+that field and declares only the client file. Both scopes are disjoint, both lanes close
+`in-scope=yes`, both builds go green on their own, and the combination is broken. If the field's
+definition lives in a path on the exclusive list, the two lanes serialize. Otherwise nothing in the
+shipped driver stops the pair: `merged` catches two lanes in one file, not in two, and `green`
+builds each lane's checkout, not main with both merged. The router does not claim it can.
+
+It is built for one shared machine. The ledger, the claims file, the lock and the worktrees are
+local files, so two dispatchers on two machines, or on a network filesystem, share none of the
+guarantees. It trusts that machine, the operator and the policy files. It does not trust an agent's
+branch or its report, and its command guards stop a slip, not a determined adversary.
+
+Read further:
+
+- [Design notes](docs/DESIGN-NOTES.md): Markdown tables as state, declared paths instead of a
+  dependency graph, and why an undeclared scope serializes.
+- [Threat model](docs/THREAT-MODEL.md): what is trusted, what is not, and the non-goals.
+- [Gate matrix](docs/gates.json): every gate, the ledger column it writes, the values it can write,
+  what it proves and what it does not. `test/gate-matrix-test.mjs` keeps it honest.
+- [How the liveness gate reads a response](docs/LIVENESS.md)
+- [Prior art](docs/PRIOR-ART.md)
 
 ## Prior art, and how this differs
 
@@ -170,7 +241,7 @@ reading for its own sake. This project keeps an append-only ledger instead, beca
 lane's declared scope and its open timestamp recorded at the moment of dispatch, which no PR or CI
 fact carries.
 
-Across a source-level read of 13 comparable tools, none did both scope-before-dispatch and
+Of the fourteen tools compared, none did both scope-before-dispatch and
 verify-after, and none checked that a merged change is actually live at a URL. That gap, rather
 than either half on its own, is what this fills.
 
@@ -179,7 +250,8 @@ than either half on its own, is what this fills.
 Node 22 or newer, per the `engines` field. Verified here on Node 25.9.0.
 
 Zero npm dependencies: Node builtins and `git`. No build step, no lockfile to audit, nothing to
-install before `npm test` runs.
+install before `npm test` runs. The type check at the end of `npm test` fetches TypeScript through
+npx on its first run, so that one step needs the network once.
 
 ```
 git clone https://github.com/hoplight-ai/pandoras-router
@@ -202,7 +274,7 @@ prose read by people. Copy them from `examples/` and edit:
 
 | file | what it holds |
 |---|---|
-| `POLICY.md` | one row per repo: writer cap, deploy style, how a deploy is proved, the liveness URL, exclusive paths, traps |
+| `POLICY.md` | one row per repo: writer cap, deploy style, how a deploy is proved, the liveness URL, exclusive paths, the `.env.local` key allowlist, traps |
 | `PREFIXES.md` | the filename vocabulary. An unrecognized lifecycle word routes nothing and is named on stdout, rather than defaulting to live |
 | `CLAIMS.md` | the visible lock, one line per active lane. Ships empty |
 | `LANES.md` | the append-only ledger of every lane opened, landed and closed. Ships empty |
@@ -230,25 +302,61 @@ Read this before wiring anything in. None of it is hidden in the code, and none 
 surprise on the day it matters.
 
 - **`open` copies the repo's `.env.local` into every worktree it creates**, mode 600, never
-  overwriting one that is already there. A fresh checkout has no credential otherwise and a lane
-  fails cold on its first job. The cost is that a credential file now exists once per checkout;
-  removing a worktree by hand leaves its copy behind unless you delete it too.
+  overwriting one that is already there. It copies the whole file, unless the repo has a row in
+  the policy's `env` table naming an allowlist; then only those keys are copied, and a listed key
+  the file lacks is reported missing by name rather than written empty. A fresh checkout has no
+  credential otherwise and a lane fails cold on its first job. The cost is that a credential file,
+  or the allowed slice of one, now exists once per checkout; removing a worktree by hand leaves its
+  copy behind unless you delete it too.
+- **The state directory carries a lock file, `_handoffs/_lanes/.lock`.** Every write to
+  `CLAIMS.md` and `LANES.md` happens while one process holds it, and `open` re-checks the board
+  under it, so two dispatchers opening overlapping lanes at the same moment get one open and one
+  refusal. The file holds the holder's pid, host, start time and script name. A caller waits up to
+  60 seconds for a live holder, then refuses and names it. A lock whose holder is dead on this host,
+  or that is older than five minutes, is broken with one printed line saying whose it was. A
+  short-lived `.lock.break` file guards the break. It is a lock for one local filesystem, not for a
+  network share.
 - **`close` runs the branch's own `npm run build` on the dispatcher's machine**, in the lane's
-  checkout. That is what a build gate is, and it means a lane's `package.json` runs code where the
-  close runs. Do not close a branch you would not build.
-- **The two shell guards in `hooks/` are pattern matchers.** They refuse what they can see on the
-  command line or in the SQL string: every spelling of force-push, branch deletion and history
-  rewrite, `rm` with a recursive and a force flag, schema and unbounded row changes, and a git
-  alias defined on the same line. A command hidden in a script file, a `sh -c "$(cat x)"`, or SQL
-  sent through a file or a stored procedure walks past them. They fail closed: with no `python3`
-  on the path they refuse rather than guess.
-- **The unlock phrase** is `flyingfish` by default; set `PANDORAS_UNLOCK_PHRASE` to your
-  own. It counts only when a person types it as a whole message or on a line by itself, and it
-  then holds for the rest of that session. Pick a phrase that is not ordinary English.
+  checkout, with a 15-minute time limit (`PANDORAS_BUILD_TIMEOUT_MS` overrides it). No shell is
+  involved on any OS: npm runs as `node <npm-cli.js> run build`, with npm-cli.js found from
+  `npm_execpath`, then beside the running Node, then (macOS and Linux only) the plain `npm` on
+  PATH. That is how Windows builds too, where `npm` is a batch file Node will not start without a
+  shell. Past the limit the build is killed with everything it started, and the gate records `no`:
+  on macOS and Linux its process group gets SIGTERM then SIGKILL, on Windows
+  `taskkill /pid <pid> /T /F` ends the process tree. Only the last 64 KB of its
+  output is kept, and the close prints that tail when the build fails. That is what a build gate
+  is, and it means a lane's `package.json` runs code where the close runs, with the close's
+  permissions and no sandbox. Do not close a branch you would not build. A green build only counts
+  on a fresh base: a branch missing commits that landed on main, other than its own landing merge,
+  records `no` with those commits named and the build is not run. A checkout with no `build` script
+  records `n/a`; one with no `node_modules`, an npm that cannot be found by those three routes (the
+  skip names each path tried), or a close run with `--no-build`, records `skip`, which is not a
+  pass.
+- **The two command guards in `hooks/`, `guard-irreversible.mjs` and `guard-report-overwrite.mjs`,
+  are Node pattern matchers.** They use Node built-ins only and need nothing else on the path: no
+  bash, no Python. The irreversible-action guard refuses what it can see on the command line or in
+  the SQL string: every spelling of force-push, branch deletion, worktree removal and history
+  rewrite, `git clean -f`, `rm` with a recursive and a force flag, schema and unbounded row
+  changes, and a git alias defined on the same line. A command hidden in a script file, a
+  `sh -c "$(cat x)"`, or SQL sent through a file or a stored procedure walks past it. Both guards
+  fail closed on input they cannot read as a JSON object.
+- **The unlock phrase has no default.** It is a human-confirmation protocol, not a secret: the way
+  a person, not an agent, says yes to one action no commit can undo. Set `PANDORAS_UNLOCK_PHRASE` to
+  a phrase of your own. With it unset or blank, nothing unlocks the guard in that session and every
+  gated command is refused with the reason named. The phrase counts only when a person types it in
+  the session as a whole message or on a line by itself; an agent writing the words, a brief
+  quoting the rule or a pasted log does not unlock anything. Once typed it holds for the rest of
+  that session. Pick a phrase that is not ordinary English.
 - **The report-overwrite guard** refuses a whole-file `Write` onto an existing `.md` at the root
   of `_handoffs/`, except the bridge's own furniture: `README.md` and `_STANDING_ORDERS.md` by
   default, or the space-separated list in `PANDORAS_BRIDGE_FURNITURE`.
-- Both guards append one line per refusal to `hooks/guard-log.jsonl` (gitignored) when the
+- **The wide-read guard, `guard-wide-read.mjs`,** refuses a whole-file `Read` of a text file over
+  12,000 bytes, about 3,000 tokens, and tells the caller to name a range. It never truncates, and a
+  read that names a range always passes. Unlike the other two it fails open on input it cannot
+  parse. `CLAUDE_WIDE_READ_BYTES` retunes the threshold and `0` turns it off.
+  `hooks/measure-wide-read.mjs` reruns the measurement behind that number on your own transcripts
+  and prints no transcript file name, project name or prompt text.
+- All three guards append one line per refusal to `hooks/guard-log.jsonl` (gitignored) when the
   harness supplies a session id, and nothing on a pass.
 
 ## License

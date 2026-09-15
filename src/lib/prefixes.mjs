@@ -1,3 +1,4 @@
+// @ts-check
 // prefixes.mjs — the bridge filename vocabulary, loaded from _handoffs/_lanes/PREFIXES.md.
 //
 // THE ONE RULE THIS MODULE ENFORCES: never default an unrecognized name to live.

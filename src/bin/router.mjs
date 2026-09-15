@@ -13,6 +13,7 @@
 //                              revert is `git revert -m 1 <merge>`; the branch never moves)
 //   pandoras-router claim      take/release a claim WITHOUT a lane, for direct work
 //   pandoras-router apply      apply a unified diff atomically, by index
+//   pandoras-router check      validate the workspace before anything fires (reads only, writes nothing)
 //
 // Arguments after the subcommand pass straight through, so `pandoras-router alloc --limit 4` and
 // running `lane-alloc.mjs --limit 4` directly are the same run.
@@ -35,6 +36,7 @@ const MAP = {
   land: ['lane-land.mjs'],
   claim: ['claim.mjs'],
   apply: ['apply-atomic.mjs'],
+  check: ['check.mjs'],
 };
 
 const [cmd, ...rest] = process.argv.slice(2);

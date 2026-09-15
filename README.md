@@ -1,5 +1,7 @@
 # Pandora's Router
 
+Built by Whit Pendergast at Hoplight (https://hoplight.ai).
+
 Site: https://pandoras-router.vercel.app
 
 Run many AI coding agents on one codebase at once: prove their declared file scopes disjoint

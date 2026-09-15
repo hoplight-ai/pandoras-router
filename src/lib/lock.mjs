@@ -80,6 +80,25 @@ export const WAIT_MS = 60_000;
 const POLL_MS = 20;
 
 /**
+ * Error codes from the exclusive-create attempt (`fs.openSync(file, 'wx')`) that mean "someone
+ * else has this right now, keep polling" rather than "abort the caller". EEXIST is the POSIX-
+ * guaranteed shape for that and always meant this. CONCFLAKE1, 2026-09-15: two windows-latest /
+ * Node 24 CI runs each failed a different concurrency-test.mjs assertion once, on two different
+ * days — one child exited with an uncaught throw before it could print its refusal, the other run
+ * had BOTH children exit that way before either wrote a claim. A fault-injection reproduction
+ * (`RED-PROOF windows contention` below) confirms the mechanism: this catch treated any code other
+ * than EEXIST as fatal and rethrew it uncaught, so a transient non-EEXIST error from the OS —
+ * on Windows NTFS a `wx` racing an in-flight delete/rename from the just-released holder can
+ * surface as a sharing violation coded EBUSY, EPERM or EACCES instead of a clean EEXIST — crashed
+ * the caller instead of being retried like ordinary contention. Adding these three costs nothing on
+ * macOS/Linux, where a `wx` open of a fresh path essentially never raises them; if one somehow did,
+ * retrying inside the existing bounded `waitMs` wait is still safe — the caller ends up refused by
+ * name (or the generic "released and re-taken" message) exactly as it already would for a live
+ * EEXIST holder that never lets go, never a silent infinite loop.
+ */
+const RETRYABLE_CREATE_CODES = new Set(['EEXIST', 'EBUSY', 'EPERM', 'EACCES']);
+
+/**
  * The break guard is held for one read and one unlink, microseconds. Older than this, its breaker
  * died mid-break and the guard is cleared.
  */
@@ -231,7 +250,7 @@ export function acquireLock(root, { waitMs = WAIT_MS, log = (l) => console.error
       try { fs.writeSync(fd, body); } finally { fs.closeSync(fd); }
       break;
     } catch (e) {
-      if (e.code !== 'EEXIST') throw e;
+      if (!RETRYABLE_CREATE_CODES.has(e.code)) throw e;
     }
     const h = readHolder(file);
     if (h) {

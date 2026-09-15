@@ -213,6 +213,9 @@ Read further:
 - [Gate matrix](docs/gates.json): every gate, the ledger column it writes, the values it can write,
   what it proves and what it does not. `test/gate-matrix-test.mjs` keeps it honest.
 - [How the liveness gate reads a response](docs/LIVENESS.md)
+- [Which modules track the private tree this was extracted from, and which are forked on
+  purpose](docs/adr/0001-shared-and-forked-modules.md). `npm run shared:check` compares the four
+  that are meant to match and names any that differ; it reports, it never copies.
 - [Prior art](docs/PRIOR-ART.md)
 
 ## Prior art, and how this differs

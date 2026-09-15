@@ -43,7 +43,7 @@ import { fileURLToPath } from 'node:url';
 
 import { loadPolicy, repoPolicy } from '../lib/policy.mjs';
 import { loadPrefixes, classify } from '../lib/prefixes.mjs';
-import { readLanes, recordClose, laneKey } from '../lib/lanes.mjs';
+import { readLanes, recordClose, laneKey, reportedUnlandedVerdict, reportOnBridge } from '../lib/lanes.mjs';
 import { releaseClaim, claimsFile } from '../lib/claims.mjs';
 import { withLock } from '../lib/lock.mjs';
 import { git, repoDirFor, isRepo } from '../lib/gitread.mjs';
@@ -432,6 +432,7 @@ async function main() {
 
   if (!apply) {
     console.log('  Nothing was written. Re-run with --apply to rename the brief and record the CLOSE.');
+    printReportedUnlandedCarryForward();
     return;
   }
 
@@ -493,6 +494,43 @@ async function main() {
     for (const l of written.released) console.log(`  released       the claim ${l}`);
   } else {
     console.log(`  claim          no active claim line carried ${rec.session || '(no session)'}, so there was nothing to release`);
+  }
+  printReportedUnlandedCarryForward();
+}
+
+// ---------------------------------------------------------------- the close carries REPORTED-
+// UNLANDED lanes to whoever picks up next (UNLANDED2, 2026-09-15)
+//
+// A close is the one moment a dispatcher is guaranteed to be reading this terminal; printing the
+// WHOLE board's outstanding land commands here means the next pickup does not need to remember to
+// go look for them. Scans every OPEN lane, not just the one closing — this lane finishing today
+// must not bury a different lane's stuck report from tomorrow's pickup.
+//
+// `branchLanded: false` is the same read-only best-effort default `laneBranchLanded` falls back to
+// when it cannot read a repo (full reasoning in lane-alloc.mjs): a false positive here only carries
+// an extra `land` command forward — `lane-land.mjs` reports an already-merged branch as "already
+// contained" and does nothing — where a false negative would silently drop exactly the thing this
+// mechanism exists to surface. WRAPPED so a read failure here can never fail the close itself; any
+// ledger record this close wrote has already landed.
+function printReportedUnlandedCarryForward() {
+  try {
+    const rows = [];
+    for (const l of readLanes(ROOT)) {
+      if (l.status !== 'OPEN') continue;
+      const onBridge = reportOnBridge(BRIDGE, l.report);
+      const v = reportedUnlandedVerdict(l, { reportExists: onBridge.found, branchLanded: false, now: Date.now() });
+      if (v) rows.push({ lane: l.lane, v });
+    }
+    if (!rows.length) return;
+    console.log('');
+    console.log('CARRY THIS TO THE NEXT PICKUP — land these first:');
+    for (const { lane, v } of rows) {
+      const age = v.ageHoursSinceReport ?? v.ageHoursSinceOpen;
+      console.log(`  ${lane}  ${v.headline}${age != null ? `  [${age.toFixed(1)}h]` : ''}`);
+      console.log(`      ${v.landCmd}`);
+    }
+  } catch (e) {
+    console.log(`\n  REPORTED-UNLANDED CARRY-FORWARD SKIPPED: ${String(e.message).split('\n')[0]}`);
   }
 }
 

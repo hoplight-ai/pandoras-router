@@ -273,7 +273,7 @@ export function parseLanes(text) {
  * assert a state it did not measure.
  *
  * @param {object} lane        a folded lane record from parseLanes()
- * @param {object} probe       { reportExists, worktreeExists, branchExists, now }
+ * @param {object} probe       { reportExists, worktreeExists, branchExists, branchLanded, now }
  * @returns {{why:string, headline:string, closeCmd:string}|null}
  */
 /**
@@ -363,14 +363,22 @@ export function recentCloses(lanes = [], { now = Date.now(), hours = 48 } = {}) 
 
 export function orphanVerdict(lane, probe = {}) {
   if (!lane || lane.status !== 'OPEN') return null;
-  const { reportExists = false, worktreeExists = true, branchExists = true, now = Date.now() } = probe;
+  const { reportExists = false, worktreeExists = true, branchExists = true, branchLanded = false, now = Date.now() } = probe;
 
-  // Order matters only for which reason is NAMED, and the most informative one goes first: a report
-  // on the bridge is positive evidence the lane got to the end, where a missing worktree is merely
-  // evidence it is not there any more.
+  // UNLANDED2, 2026-09-15: a filed report used to be enough on its own to call a lane ORPHANED, and
+  // that reading could not tell "finished and just waiting on a formal close" apart from "one command
+  // from done, branch still unmerged" — both printed the identical headline. `reportExists` no longer
+  // decides anything HERE by itself. A filed report whose branch is already merged into main is
+  // neither ORPHANED nor unlanded, it is just waiting on `pandoras-router close`; that one case
+  // returns null outright. Every other lane (no report at all, OR a report with a branch that is not
+  // yet merged) falls through to the same worktree/branch/age cascade this always ran — unchanged for
+  // the no-report cases, and `reportedUnlandedVerdict` below is what now speaks for the has-report,
+  // not-yet-merged case instead of this function mislabeling it ORPHANED.
+  if (reportExists && branchLanded) return null;
+
+  // Order matters only for which reason is NAMED, and the most informative one goes first.
   let why = null;
-  if (reportExists) why = `its declared report ${lane.report} is already on the bridge`;
-  else if (!worktreeExists) why = `its worktree ${lane.worktree} does not exist on disk`;
+  if (!worktreeExists) why = `its worktree ${lane.worktree} does not exist on disk`;
   else if (!branchExists) why = `its branch ${lane.branch} does not exist in the repo`;
   else {
     const opened = Date.parse(lane.opened);
@@ -384,6 +392,60 @@ export function orphanVerdict(lane, probe = {}) {
     why,
     headline: `ORPHANED, slot freed, work state UNKNOWN — ${why}`,
     closeCmd: `pandoras-router close ${lane.lane}`,
+  };
+}
+
+/**
+ * REPORTED-UNLANDED — a filed report on a branch that has not merged into main yet.
+ *
+ * Whit, 2026-09-15, the origin of this verdict: "nothing on the board escalates a lane whose report
+ * is filed but whose merge is still waiting." Before this, `orphanVerdict` fired the moment
+ * `reportExists` was true, so a lane one command from done (report filed, branch just needs
+ * `pandoras-router land`) printed the exact same `ORPHANED, work state UNKNOWN` headline as a lane
+ * whose report was filed and whose branch had already landed cleanly, or one nobody has touched in
+ * days.
+ *
+ * FIRES ONLY WHEN A REPORT EXISTS AND THE BRANCH IS NOT YET MERGED — never on its own, never on a
+ * missing report (that is still `orphanVerdict`'s territory, untouched), and never once the branch
+ * lands (a filed report on a landed branch is just waiting on a formal close, not escalated).
+ *
+ * `ageHoursSinceReport` / `ageHoursSinceOpen` are mutually exclusive on purpose: whichever the caller
+ * could actually measure (the report file's own mtime, when known; the lane's OPEN timestamp
+ * otherwise) is the one carrying a number, so a reader never mistakes one clock for the other.
+ *
+ * @param {object} lane   a folded lane record from parseLanes()
+ * @param {object} probe  { reportExists, branchLanded, reportFiledMs, now }
+ * @returns {{why:string, headline:string, landCmd:string, ageHoursSinceReport:number|null, ageHoursSinceOpen:number|null}|null}
+ */
+export function reportedUnlandedVerdict(lane, probe = {}) {
+  if (!lane || lane.status !== 'OPEN') return null;
+  const { reportExists = false, branchLanded = false, reportFiledMs = null, now = Date.now() } = probe;
+  if (!reportExists || branchLanded) return null;
+
+  let ageHours = null;
+  let ageHoursSinceReport = null;
+  let ageHoursSinceOpen = null;
+  if (reportFiledMs != null && !Number.isNaN(reportFiledMs)) {
+    ageHours = (now - reportFiledMs) / 3_600_000;
+    ageHoursSinceReport = ageHours;
+  } else {
+    const opened = Date.parse(lane.opened);
+    if (!Number.isNaN(opened)) {
+      ageHours = (now - opened) / 3_600_000;
+      ageHoursSinceOpen = ageHours;
+    }
+  }
+
+  const ageText = ageHours == null ? 'age unknown' : `filed ${ageHours.toFixed(1)}h ago`;
+  const landCmd = `pandoras-router land ${lane.lane}`;
+  const why = `its declared report ${lane.report} is on the bridge but its branch ${lane.branch} is not yet merged into main`;
+
+  return {
+    why,
+    headline: `REPORTED-UNLANDED, one command from done — ${why} (${ageText})`,
+    landCmd,
+    ageHoursSinceReport,
+    ageHoursSinceOpen,
   };
 }
 

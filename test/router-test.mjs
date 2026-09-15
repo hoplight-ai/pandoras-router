@@ -31,7 +31,8 @@ import { laneIdFor, slugFor, reportFor, branchFor, worktreeFor, sessionIdFor, to
 import { notBeforeOf, notBeforeVerdict, modelOf, modelIdFor, setModels, priorityOf, filedOf, compareBriefOrder, orderRuleOf, scopeTokens, standingOf, refiresAfterClose, fieldLabelOf, MAX_LINE } from '../src/lib/briefs.mjs';
 import { parseModels } from '../src/lib/policy.mjs';
 import { allocate, undeclaredCause } from '../src/lib/alloc.mjs';
-import { orphanVerdict, parseLanes, encodeScope, decodeScope, SCOPE_NONE, laneKey, closedUnrenamedVerdict, recentCloses, reportOnBridge } from '../src/lib/lanes.mjs';
+import { orphanVerdict, reportedUnlandedVerdict, parseLanes, encodeScope, decodeScope, SCOPE_NONE, laneKey, closedUnrenamedVerdict, recentCloses, reportOnBridge } from '../src/lib/lanes.mjs';
+import { render } from '../src/bin/lane-alloc.mjs';
 import { laneOpenPlan, openRefusal, IN_PLACE, WORKTREE, FRESH_CLAIM_MINUTES, resumeVerdict } from '../src/lib/open.mjs';
 import { classifyLock, repoReadState, sweepDecision, lockSites } from '../src/lib/gitread.mjs';
 import { replaceFromIndex, modeForTarget, DEFAULT_NEW_MODE, TMP_SUFFIX } from '../src/lib/atomic.mjs';
@@ -1567,11 +1568,16 @@ T('order: the rule that applied is printable, so nobody has to guess', () => {
 // might be a session that crashed after merging. Freeing the slot is still right — a dead lane
 // holding a repo hostage is the more expensive failure — but the board must never assert something
 // it did not measure.
-T('RED-PROOF orphan: an OPEN lane whose report is already on the bridge is ORPHANED', () => {
+T('RED-PROOF orphan: a filed report NO LONGER orphans a lane on its own (UNLANDED2 superseded this)', () => {
+  // Until 2026-09-15 `reportExists: true` alone was enough to call this ORPHANED — the exact defect
+  // UNLANDED2 exists to fix: a report on the bridge with an unmerged branch and one with a landed
+  // branch printed the identical `ORPHANED, work state UNKNOWN` headline. This assertion is the
+  // negative of the old one: a filed report with a healthy worktree and branch is no longer treated
+  // as abandoned by this function at all — see the REPORTED-UNLANDED block below for what it
+  // becomes when the branch has not merged.
   const lane = { lane: 'strag1', repo: 'repo-a', status: 'OPEN', report: 'done-x.md', worktree: 'wt', branch: 'br', opened: '2026-08-24T02:00:00Z' };
-  const v = orphanVerdict(lane, { reportExists: true, worktreeExists: true, branchExists: true, now: Date.parse('2026-08-24T02:10:00Z') });
-  assert.ok(v, 'expected an ORPHANED verdict');
-  assert.match(v.why, /report/i);
+  const v = orphanVerdict(lane, { reportExists: true, worktreeExists: true, branchExists: true, branchLanded: false, now: Date.parse('2026-08-24T02:10:00Z') });
+  assert.equal(v, null, 'a filed report must not orphan a lane on its own any more');
 });
 
 T('orphan: a vanished worktree orphans the lane, and the reason names which condition fired', () => {
@@ -1613,6 +1619,76 @@ T('RED-PROOF orphan: an ORPHANED lane does NOT hold its declared scope', () => {
   assert.ok(blocked.cards[0].firesAfter, 'a LIVE lane holding this scope must still block');
   const freed = allocate({ briefs: [b], policy: P, claims, openLanes, orphanedLanes: new Set(['dead']), date: '2026-08-24' });
   assert.equal(freed.cards[0].firesAfter, null, 'an ORPHANED lane must not hold its scope');
+});
+
+// ---------------------------------------------------------------- REPORTED-UNLANDED (UNLANDED2)
+//
+// Whit, 2026-09-15, the origin of this lane: "nothing on the board escalates a lane whose report is
+// filed but whose merge is still waiting." Five lanes filed reports and their branches were never
+// merged, and for two days the board could only call them ORPHANED — indistinguishable from
+// abandoned work. These are the brief's own red-proof list.
+T('RED-PROOF reported-unlanded: a filed report with an unmerged branch is REPORTED-UNLANDED, not ORPHANED', () => {
+  const lane = { lane: 'unl1', repo: 'repo-a', status: 'OPEN', report: 'done-x.md', worktree: 'wt', branch: 'br', opened: '2026-08-24T02:00:00Z' };
+  const probe = { reportExists: true, worktreeExists: true, branchExists: true, branchLanded: false, now: Date.parse('2026-08-24T02:10:00Z') };
+  const ru = reportedUnlandedVerdict(lane, probe);
+  assert.ok(ru, 'expected a REPORTED-UNLANDED verdict');
+  assert.match(ru.headline, /REPORTED-UNLANDED/);
+  assert.equal(orphanVerdict(lane, probe), null, 'orphanVerdict must stay silent on the same input');
+});
+T('RED-PROOF reported-unlanded: once the branch lands, neither verdict fires — it is just waiting on a close', () => {
+  const lane = { lane: 'unl1', repo: 'repo-a', status: 'OPEN', report: 'done-x.md', worktree: 'wt', branch: 'br', opened: '2026-08-24T02:00:00Z' };
+  const probe = { reportExists: true, worktreeExists: true, branchExists: true, branchLanded: true, now: Date.parse('2026-08-24T02:10:00Z') };
+  assert.equal(reportedUnlandedVerdict(lane, probe), null, 'a landed branch is not REPORTED-UNLANDED');
+  assert.equal(orphanVerdict(lane, probe), null, 'a filed report with a landed branch is not ORPHANED either');
+});
+T('RED-PROOF reported-unlanded: with no filed report at all, ORPHANED still fires exactly as before, and REPORTED-UNLANDED never fires', () => {
+  const lane = { lane: 'strag1', repo: 'repo-a', status: 'OPEN', report: 'done-x.md', worktree: 'wt', branch: 'br', opened: '2026-08-24T02:00:00Z' };
+  const now = Date.parse('2026-08-24T02:10:00Z');
+  // worktree-missing
+  assert.match(orphanVerdict(lane, { reportExists: false, worktreeExists: false, branchExists: true, branchLanded: false, now }).why, /worktree/i);
+  assert.equal(reportedUnlandedVerdict(lane, { reportExists: false, worktreeExists: false, branchExists: true, branchLanded: false, now }), null);
+  // branch-missing
+  assert.match(orphanVerdict(lane, { reportExists: false, worktreeExists: true, branchExists: false, branchLanded: false, now }).why, /branch/i);
+  assert.equal(reportedUnlandedVerdict(lane, { reportExists: false, worktreeExists: true, branchExists: false, branchLanded: false, now }), null);
+  // stale-OPEN
+  const justPast = Date.parse('2026-08-24T02:00:00Z') + (CLAIM_ACTIVE_HOURS + 0.5) * 3_600_000;
+  assert.match(orphanVerdict(lane, { reportExists: false, worktreeExists: true, branchExists: true, branchLanded: false, now: justPast }).why, /older than/i);
+  assert.equal(reportedUnlandedVerdict(lane, { reportExists: false, worktreeExists: true, branchExists: true, branchLanded: false, now: justPast }), null);
+});
+T('RED-PROOF reported-unlanded: the printed line carries the literal land command and an age figure', () => {
+  // This is the exact string both lane-alloc.mjs and close.mjs print verbatim (`v.headline` /
+  // `v.landCmd`), the same pattern this suite already uses to red-proof orphanVerdict's own
+  // `v.headline` / `v.closeCmd` above rather than re-rendering either board's output.
+  const lane = { lane: 'unl1', repo: 'repo-a', status: 'OPEN', report: 'done-x.md', worktree: 'wt', branch: 'br', opened: '2026-09-10T00:00:00Z' };
+  const now = Date.parse('2026-09-12T00:00:00Z');
+  const ru = reportedUnlandedVerdict(lane, { reportExists: true, branchLanded: false, now });
+  assert.equal(ru.landCmd, 'pandoras-router land unl1');
+  assert.equal(ru.ageHoursSinceOpen, 48);
+  assert.match(ru.headline, /48\.0h ago/);
+  // and with a real report-filed timestamp, the report clock wins over the OPEN clock
+  const ruFiled = reportedUnlandedVerdict(lane, { reportExists: true, branchLanded: false, reportFiledMs: Date.parse('2026-09-11T12:00:00Z'), now });
+  assert.equal(ruFiled.ageHoursSinceOpen, null);
+  assert.equal(ruFiled.ageHoursSinceReport, 12);
+  assert.match(ruFiled.headline, /12\.0h ago/);
+});
+T('reported-unlanded: a CLOSED lane never gets it, and a lane with no report never gets it', () => {
+  const closed = { lane: 'x', repo: 'r', status: 'DONE', report: 'r.md', worktree: 'wt', branch: 'br', opened: '2026-08-24T02:00:00Z' };
+  const noReport = { lane: 'y', repo: 'r', status: 'OPEN', report: '-', worktree: 'wt', branch: 'br', opened: '2026-08-24T02:00:00Z' };
+  const now = Date.parse('2026-08-24T02:10:00Z');
+  assert.equal(reportedUnlandedVerdict(closed, { reportExists: true, branchLanded: false, now }), null);
+  assert.equal(reportedUnlandedVerdict(noReport, { reportExists: false, branchLanded: false, now }), null);
+});
+T('RED-PROOF reported-unlanded: render() prints the literal land command and an age figure for a REPORTED-UNLANDED fixture', () => {
+  const lane = { lane: 'unl1', repo: 'repo-a', status: 'OPEN', report: 'done-x.md', worktree: 'wt', branch: 'br', opened: '2026-09-10T00:00:00Z' };
+  const ru = reportedUnlandedVerdict(lane, { reportExists: true, branchLanded: false, now: Date.parse('2026-09-12T00:00:00Z') });
+  const r = {
+    refused: [], orphans: new Map(), reportedUnlanded: new Map([['unl1', ru]]),
+    cards: [], skipped: [], truncated: [], remainders: [], hiddenClerical: [], briefs: [], documents: [],
+  };
+  const out = render(r);
+  assert.match(out, /pandoras-router land unl1/, 'the printed line must carry the literal land command');
+  assert.match(out, /48\.0h/, 'the printed line must carry an age figure');
+  assert.match(out, /REPORTED-UNLANDED\t1/, 'the summary block must count it');
 });
 
 // ---------------------------------------------------------------- model as a real field

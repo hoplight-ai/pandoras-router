@@ -198,11 +198,39 @@ export function filterEnvLines(text, keys) {
 }
 
 /**
+ * WRITE A CREDENTIAL FILE THAT WAS PRIVATE FROM THE MOMENT IT EXISTED.
+ *
+ * THE DEFECT THIS CLOSES: the copy used to be written at the process umask and chmodded to 600
+ * afterwards. Between those two calls the file sat at 0o644 on an ordinary machine — readable by
+ * every account on it — and a final mode of 600 does not prove otherwise. `test/env-copy-test.mjs`
+ * measures the mode the first moment the file exists, which is the only measurement that can tell
+ * the two apart.
+ *
+ * `wx` also closes the gap between "the destination does not exist" and "write it": the open fails
+ * outright if something appeared in between, rather than landing on top of it. The mode argument
+ * is masked by the umask like any other open, and 0o600 has no group or other bits for a umask to
+ * take away, so the result is exactly 0o600 whatever the operator's umask is.
+ *
+ * @param {string} destPath
+ * @param {string|Buffer} contents
+ * @returns {void}
+ */
+function writePrivateFile(destPath, contents) {
+  const fd = fs.openSync(destPath, 'wx', 0o600);
+  try {
+    fs.writeFileSync(fd, contents);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
  * The disk half of envCopyPlan. A plain file copy, never a symlink (a symlinked credential would
  * follow the repo's own file if either copy is ever edited, which defeats the point of a lane
- * having its own checkout), mode 600 because a credential file has no business being
- * group/world-readable. Never throws: a failed copy is reported and the lane still opens correctly
- * — the same "loud, not fatal" shape installPlan's own failure handling uses just above.
+ * having its own checkout), created at mode 600 because a credential file has no business being
+ * group/world-readable for even an instant. Never throws: a failed copy is reported and the lane
+ * still opens correctly — the same "loud, not fatal" shape installPlan's own failure handling uses
+ * just above.
  *
  * `envKeys`, when given (POLICY.md's optional `env` table — see policy.mjs), narrows the copy to
  * exactly those variable names via filterEnvLines instead of copying the whole file. Omitted or
@@ -229,14 +257,15 @@ export function copyEnvFile({ repoDir, checkoutDir, inPlace, envKeys = null }) {
     if (envKeys && envKeys.length) {
       const source = fs.readFileSync(repoEnvPath, 'utf8');
       const { lines, found, missing } = filterEnvLines(source, envKeys);
-      fs.writeFileSync(worktreeEnvPath, lines.length ? `${lines.join('\n')}\n` : '');
-      fs.chmodSync(worktreeEnvPath, 0o600);
+      writePrivateFile(worktreeEnvPath, lines.length ? `${lines.join('\n')}\n` : '');
       const missingNote = missing.length ? `; missing: ${missing.join(', ')}` : '';
       console.log(`  env        ${found.length} of ${envKeys.length} keys copied from the repo (mode 600)${missingNote}`);
       return { ...plan, copied: true, error: null };
     }
-    fs.copyFileSync(repoEnvPath, worktreeEnvPath);
-    fs.chmodSync(worktreeEnvPath, 0o600);
+    // Read and write rather than fs.copyFileSync, which creates the destination before anything
+    // can set its mode. A credential file is bytes, not megabytes (see envCopyPlan above), so
+    // holding it in memory for one write costs nothing and the copy is byte for byte.
+    writePrivateFile(worktreeEnvPath, fs.readFileSync(repoEnvPath));
     console.log('  env        .env.local copied from the repo (mode 600)');
     return { ...plan, copied: true, error: null };
   } catch (e) {

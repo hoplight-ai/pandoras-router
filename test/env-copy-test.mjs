@@ -53,6 +53,42 @@ function modeOf(p) {
   return fs.statSync(p).mode & 0o777;
 }
 
+// ── THE WINDOW BETWEEN CREATING A CREDENTIAL FILE AND MAKING IT PRIVATE ────────────────────────
+//
+// A final mode of 600 does not prove the file was never readable. Creating it at the process
+// umask and chmodding it afterwards leaves a window — short, but a window — in which every account
+// on the machine can read a credential. The final-mode assertions below cannot see that window:
+// they pass either way.
+//
+// So this records the mode the file has the FIRST MOMENT IT EXISTS, by wrapping every fs call that
+// can create it and stat-ing the path as soon as that call returns. `modes[0]` is what any other
+// process would have seen. It must already be 0o600; a later chmod cannot un-ring that bell.
+//
+// The umask is forced to the common 0o022 for the duration, so "created at the umask" is 0o644
+// here on any machine, rather than accidentally being 0o600 on an operator whose umask is 0o077.
+const CREATING_CALLS = ['openSync', 'writeFileSync', 'copyFileSync', 'chmodSync'];
+function modesWhileCreating(destPath, fn) {
+  const modes = [];
+  const originals = new Map();
+  const prevUmask = POSIX_MODES ? process.umask(0o022) : null;
+  for (const name of CREATING_CALLS) {
+    const original = fs[name];
+    originals.set(name, original);
+    fs[name] = (...args) => {
+      const r = original(...args);
+      try { if (fs.existsSync(destPath)) modes.push(modeOf(destPath)); } catch { /* not yet there */ }
+      return r;
+    };
+  }
+  try {
+    fn();
+  } finally {
+    for (const [name, original] of originals) fs[name] = original;
+    if (prevUmask !== null) process.umask(prevUmask);
+  }
+  return modes;
+}
+
 // ---------------------------------------------------------------- filterEnvLines (pure)
 
 T('filterEnvLines keeps only listed keys, drops comments and blanks, preserves file order', () => {
@@ -122,6 +158,50 @@ T('a listed key the source file lacks is printed by name as missing, and the cop
     assert.equal(fs.readFileSync(worktreeEnvPath, 'utf8'), 'ALPHA_KEY=one\n', 'ZETA_KEY is missing, not invented as an empty line');
     assert.ok(log.some((l) => l.includes('ZETA_KEY')), `expected the printed env line to name ZETA_KEY as missing; got: ${JSON.stringify(log)}`);
     assert.ok(log.some((l) => /1 of 2/.test(l)), `expected the printed env line to count "1 of 2"; got: ${JSON.stringify(log)}`);
+  } finally {
+    fs.rmSync(repoDir, { recursive: true, force: true });
+    fs.rmSync(checkoutDir, { recursive: true, force: true });
+  }
+});
+
+T('RED-PROOF the allowlisted copy is CREATED private: mode 600 the first moment it exists, not chmodded afterwards', () => {
+  if (!POSIX_MODES) return;
+  const repoDir = mkTmp('env-copy-repo-');
+  const checkoutDir = mkTmp('env-copy-checkout-');
+  try {
+    fs.writeFileSync(path.join(repoDir, '.env.local'), FIXTURE_ENV);
+    const worktreeEnvPath = path.join(checkoutDir, '.env.local');
+    let seen = [];
+    withCapturedLog(() => {
+      seen = modesWhileCreating(worktreeEnvPath, () => {
+        copyEnvFile({ repoDir, checkoutDir, inPlace: false, envKeys: ['ALPHA_KEY', 'BETA_KEY'] });
+      });
+    });
+    assert.ok(seen.length, 'the copy was never created, so there is nothing to measure');
+    assert.equal(seen[0].toString(8), '600',
+      `the allowlisted credential copy first existed at mode ${seen[0].toString(8)}, readable by every account on the machine until a later chmod; create it with mode 600 instead`);
+  } finally {
+    fs.rmSync(repoDir, { recursive: true, force: true });
+    fs.rmSync(checkoutDir, { recursive: true, force: true });
+  }
+});
+
+T('RED-PROOF the whole-file copy is CREATED private too: mode 600 the first moment it exists', () => {
+  if (!POSIX_MODES) return;
+  const repoDir = mkTmp('env-copy-repo-');
+  const checkoutDir = mkTmp('env-copy-checkout-');
+  try {
+    fs.writeFileSync(path.join(repoDir, '.env.local'), FIXTURE_ENV);
+    const worktreeEnvPath = path.join(checkoutDir, '.env.local');
+    let seen = [];
+    withCapturedLog(() => {
+      seen = modesWhileCreating(worktreeEnvPath, () => {
+        copyEnvFile({ repoDir, checkoutDir, inPlace: false, envKeys: null });
+      });
+    });
+    assert.ok(seen.length, 'the copy was never created, so there is nothing to measure');
+    assert.equal(seen[0].toString(8), '600',
+      `the whole-file credential copy first existed at mode ${seen[0].toString(8)}, readable by every account on the machine until a later chmod; create it with mode 600 instead`);
   } finally {
     fs.rmSync(repoDir, { recursive: true, force: true });
     fs.rmSync(checkoutDir, { recursive: true, force: true });

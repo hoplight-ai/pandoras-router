@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -323,7 +324,7 @@ T('fresh base: the same branch after merging main grades on its build', async ()
 // (duration, signal, exit code, tail) is asserted field by field rather than read back off a
 // printed line.
 
-const { buildPlan, runBuild, buildTimeoutFrom, tailBuffer, resolveNpm, treeKillCommand, BUILD_TIMEOUT_MS, BUILD_MAX_OUTPUT_BYTES } = await import('../src/lib/build.mjs');
+const { buildPlan, runBuild, buildTimeoutFrom, tailBuffer, resolveNpm, resolveOnPath, treeKillCommand, BUILD_TIMEOUT_MS, BUILD_MAX_OUTPUT_BYTES } = await import('../src/lib/build.mjs');
 const { freshBaseFromRevList } = await import('../src/lib/close.mjs');
 
 /** A resolver that always answers `cli` beside a fixed node, for plans whose command is asserted. */
@@ -531,6 +532,165 @@ T('RED-PROOF freshBaseFromRevList: a neighbour commit is not fresh and is named;
   const landed = freshBaseFromRevList({ listed: 'L M0 T', land: { tip: 'T', merge: 'L' }, isInBranch: (s) => s === 'T' });
   assert.equal(landed.fresh, true, landed.why);
   assert.equal(freshBaseFromRevList({ listed: null, isInBranch: () => true }).fresh, null);
+});
+
+// ---------------------------------------------------------------- a declared build command
+//
+// BUILDCMD1, 2026-09-15. A repository built by something other than npm used to get a skip, and a
+// skip is not a pass. The policy's `build` column names its build command as an argument array, and
+// the run has to keep every limit the npm path already had. These assertions hold each limit
+// SEPARATELY, because the failure worth catching is a declared command that works while quietly
+// running under a shell, under its own time limit, or under no kill at all.
+//
+// The declared command in the running cases is `node`, resolved on PATH by the real lookup, so the
+// same assertions run on macOS, Linux and Windows against a real child process.
+
+/**
+ * A declaration in the shape parseBuild returns, built here so these cases do not re-test the parser.
+ * @param {string} command
+ * @param {...string} args
+ */
+const decl = (command, ...args) => ({ command, args, label: [command, ...args].join(' ') });
+/**
+ * A PATH lookup that answers one fixed executable, for plans whose resolved command is asserted.
+ * @param {string} abs
+ * @returns {(name: string, o: {env: Record<string, string|undefined>}) => {command:string|null, tried:string[], shellOnly:string|null, searched:number}}
+ */
+const foundAt = (abs) => () => ({ command: abs, tried: [abs], shellOnly: null, searched: 1 });
+
+T('buildPlan: a declared command plans as an argument array on the PATH-resolved executable, in the lane checkout, and needs neither a package.json nor node_modules', () => {
+  const p = buildPlan({ checkout: '/c', pkg: null, nodeModules: false, build: decl('cargo', 'build', '--release'), lookup: foundAt('/usr/bin/cargo') });
+  assert.equal(p.verdict, null, `a declared command must not be ${p.verdict}: ${p.why}`);
+  assert.equal(p.command, '/usr/bin/cargo');
+  assert.deepEqual(p.args, ['build', '--release']);
+  assert.equal(p.label, 'cargo build --release');
+  assert.equal(p.cwd, '/c');
+  assert.equal(p.npm, null, 'a declared command must not resolve npm');
+  assert.match(p.why, /cargo build --release/);
+  assert.match(p.why, /\/usr\/bin\/cargo/, 'the plan does not name the executable it resolved');
+});
+
+T('buildPlan: a repository that declares nothing takes the npm path, byte for byte the plan it took before the column existed', () => {
+  const args = { checkout: '/c', pkg: { scripts: { build: 'x' } }, nodeModules: true, resolve: fixedResolver('/n/npm-cli.js') };
+  assert.deepEqual(buildPlan({ ...args, build: null }), buildPlan(args));
+  assert.deepEqual(buildPlan({ ...args, build: undefined }), buildPlan(args));
+  assert.equal(buildPlan({ ...args, build: null }).label, 'npm run build');
+  // And the npm-only verdicts stay npm-only: no build script is still n/a, no node_modules still skip.
+  assert.equal(buildPlan({ checkout: '/c', pkg: null, build: null }).verdict, 'n/a');
+  assert.equal(buildPlan({ checkout: '/c', pkg: { scripts: { build: 'x' } }, nodeModules: false, build: null }).verdict, 'skip');
+});
+
+T('RED-PROOF buildPlan: the time limit and the output cap are the dispatcher\'s, and a declaration carrying its own cannot lengthen either', () => {
+  const base = { checkout: '/c', pkg: null, lookup: foundAt('/usr/bin/make') };
+  assert.equal(buildPlan({ ...base, build: decl('make', 'build'), env: {} }).timeoutMs, BUILD_TIMEOUT_MS);
+  assert.equal(buildPlan({ ...base, build: decl('make', 'build'), env: {} }).maxOutputBytes, BUILD_MAX_OUTPUT_BYTES);
+  // The environment override is the dispatcher's own and still works.
+  assert.equal(buildPlan({ ...base, build: decl('make', 'build'), env: { PANDORAS_BUILD_TIMEOUT_MS: '1000' } }).timeoutMs, 1000);
+  // A declaration that grew extra fields — the shape a per-repository limit would arrive in — changes nothing.
+  const sneaky = { ...decl('make', 'build'), timeoutMs: 99 * 60_000, maxOutputBytes: 1, shell: true };
+  const p = buildPlan({ ...base, build: sneaky, env: {} });
+  assert.equal(p.timeoutMs, BUILD_TIMEOUT_MS, 'a policy declaration lengthened the build time limit');
+  assert.equal(p.maxOutputBytes, BUILD_MAX_OUTPUT_BYTES, 'a policy declaration changed the output cap');
+  assert.equal(/** @type {any} */ (p).shell, undefined, 'a policy declaration reached the spawn options');
+});
+
+T('RED-PROOF resolveOnPath: only absolute PATH entries are searched, so the checkout the build runs in can never supply the executable', () => {
+  /** @type {string[]} */
+  const seen = [];
+  const r = resolveOnPath('build', {
+    env: { PATH: ['.', '', 'rel/dir', '/usr/bin'].join(':') },
+    platform: 'linux',
+    exists: (p) => { seen.push(p); return false; },
+  });
+  assert.deepEqual(seen, ['/usr/bin/build'], 'a relative PATH entry was searched, which resolves against the repository being built');
+  assert.equal(r.command, null);
+  const hit = resolveOnPath('cargo', { env: { PATH: '/nope:/usr/bin' }, platform: 'linux', exists: (p) => p === '/usr/bin/cargo' });
+  assert.equal(hit.command, '/usr/bin/cargo');
+  assert.deepEqual(hit.tried, ['/nope/cargo', '/usr/bin/cargo']);
+});
+
+T('RED-PROOF resolveOnPath on Windows: an .exe is found, and a command that exists only as a batch file is NOT run, because that would need a shell', () => {
+  const win = { platform: 'win32', env: { PATH: 'C:\\bin;C:\\tools' } };
+  const exe = resolveOnPath('cargo', { ...win, exists: (p) => p === 'C:\\tools\\cargo.exe' });
+  assert.equal(exe.command, 'C:\\tools\\cargo.exe');
+  const batch = resolveOnPath('pnpm', { ...win, exists: (p) => p === 'C:\\bin\\pnpm.cmd' });
+  assert.equal(batch.command, null, 'a .cmd was spawned without a shell, which Node refuses and a shell would re-parse');
+  assert.equal(batch.shellOnly, 'C:\\bin\\pnpm.cmd');
+});
+
+T('RED-PROOF buildPlan: a declared command that is not on PATH is a skip naming it, and runBuild spawns nothing', async () => {
+  const missing = 'pandoras-no-such-build-tool-9f3c';
+  const p = buildPlan({ checkout: '/c', pkg: null, build: decl(missing, 'build'), env: baseEnv() });
+  assert.equal(p.verdict, 'skip', p.why);
+  assert.ok(p.why.includes(missing), `the skip does not name the command: ${p.why}`);
+  assert.match(p.why, /PATH/);
+  assert.match(p.why, /skip is not a pass/);
+  let called = false;
+  const r = await runBuild(p, { spawn: /** @type {any} */ (() => { called = true; throw new Error('must not spawn'); }) });
+  assert.equal(r.verdict, 'skip');
+  assert.equal(called, false);
+});
+
+T('RED-PROOF runBuild: a declared command is spawned as an argument array with shell false, detached only where the process group is, in the lane checkout', async () => {
+  /** @type {any} */
+  let call = null;
+  const spawn = /** @type {any} */ ((command, args, opts) => {
+    call = { command, args, opts };
+    const c = new EventEmitter();
+    Object.assign(c, { pid: 4242, stdout: new EventEmitter(), stderr: new EventEmitter(), kill: () => true });
+    setImmediate(() => { c.emit('spawn'); c.emit('exit', 0, null); c.emit('close', 0, null); });
+    return c;
+  });
+  const plan = buildPlan({ checkout: '/c', pkg: null, build: decl('cargo', 'build', '--release'), lookup: foundAt('/usr/bin/cargo') });
+  const r = await runBuild(plan, { spawn });
+  assert.equal(r.verdict, 'yes', r.why);
+  assert.match(r.why, /cargo build --release/, 'the verdict does not name the command that ran');
+  assert.equal(call.command, '/usr/bin/cargo');
+  assert.deepEqual(call.args, ['build', '--release'], 'the arguments did not reach spawn as an array');
+  assert.equal(call.opts.shell, false, 'a declared command was spawned through a shell');
+  assert.equal(call.opts.cwd, '/c');
+  assert.equal(call.opts.detached, process.platform !== 'win32');
+});
+
+T('runBuild: a declared command really runs, exits 0, and the verdict and the record name it', async () => {
+  await withBin(null, async (w, env) => {
+    const script = path.join(w.bin, 'declared-build.cjs');
+    fs.writeFileSync(script, `require('node:fs').writeFileSync(${JSON.stringify(w.out)}, JSON.stringify({ cwd: process.cwd(), argv: process.argv.slice(2) }));\nconsole.log('DECLARED-BUILD-OK');\n`);
+    const plan = buildPlan({ checkout: w.dir, pkg: null, build: decl('node', script), env });
+    assert.equal(plan.verdict, null, plan.why);
+    const r = await runBuild(plan, { env });
+    assert.equal(r.verdict, 'yes', r.why);
+    assert.equal(r.exitCode, 0);
+    assert.match(r.tail, /DECLARED-BUILD-OK/);
+    assert.ok(r.why.includes('node'), `the verdict does not name the command: ${r.why}`);
+    assert.equal(real(JSON.parse(fs.readFileSync(w.out, 'utf8')).cwd), w.dir, 'the declared build did not run in the lane checkout');
+  });
+});
+
+T('RED-PROOF runBuild: a declared command that exits non-zero is no, with its exit code and its output', async () => {
+  await withBin(null, async (w, env) => {
+    const script = path.join(w.bin, 'declared-build-fail.cjs');
+    fs.writeFileSync(script, `console.error('DECLARED-BUILD-FAILED');\nprocess.exit(2);\n`);
+    const r = await runBuild(buildPlan({ checkout: w.dir, pkg: null, build: decl('node', script), env }), { env });
+    assert.equal(r.verdict, 'no', r.why);
+    assert.equal(r.exitCode, 2);
+    assert.match(r.tail, /DECLARED-BUILD-FAILED/);
+  });
+});
+
+T(`RED-PROOF runBuild: a declared command that never exits is killed at the dispatcher's limit with its whole ${WIN ? 'process tree' : 'process group'}, and grades no`, async () => {
+  await withBin(null, async (w, env) => {
+    const script = path.join(w.bin, 'declared-build-hang.cjs');
+    fs.writeFileSync(script, `const fs = require('node:fs');\nconst OUT = ${JSON.stringify(w.out)};\nfs.writeFileSync(OUT, '{}');\n${FAKE.hang}\n`);
+    const plan = buildPlan({ checkout: w.dir, pkg: null, build: decl('node', script), env });
+    const r = await runBuild(plan, { env, timeoutMs: 1000, killGraceMs: 500 });
+    assert.equal(r.verdict, 'no', r.why);
+    assert.match(r.why, /1000 ms limit/);
+    assert.ok(r.durationMs >= 1000, `graded after ${r.durationMs} ms, before the limit`);
+    await assertTreeGone(w);
+    if (WIN) assert.match(r.why, /process tree was killed \(taskkill \/T \/F\)/);
+    else assert.ok(r.signal === 'SIGTERM' || r.signal === 'SIGKILL', `signal was ${r.signal}`);
+  });
 });
 
 // ---------------------------------------------------------------- run

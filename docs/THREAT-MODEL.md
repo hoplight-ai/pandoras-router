@@ -72,9 +72,11 @@ whole mechanism. Pick one that is not ordinary English so it cannot appear by ac
 
 Both are under "What this touches on your machine" in the README, and both are deliberate.
 
-1. **`open` copies the repo's `.env.local` into every worktree it creates**, mode 600, never
-   overwriting one already there. A credential file then exists once per checkout, and removing a
-   worktree by hand leaves its copy behind.
+1. **`open` copies a credential into a new worktree only when the policy's `env` table names the
+   keys**, and copies nothing for a repo with no row there. The copy holds exactly those keys, is
+   created at mode 600 rather than created and then made private, and never overwrites an
+   `.env.local` already in the worktree. Where a row exists, that slice of a credential file then
+   exists once per checkout, and removing a worktree by hand leaves the slice behind.
 2. **`close` runs the branch's own build on the dispatcher's machine**, in the lane's checkout.
    That is what a build gate is, and it means a lane's `package.json` runs code where the close runs.
    The run is bounded, not contained (`src/lib/build.mjs`): no shell on any OS. npm is resolved to

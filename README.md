@@ -295,7 +295,7 @@ prose read by people. Copy them from `examples/` and edit:
 
 | file | what it holds |
 |---|---|
-| `POLICY.md` | one row per repo: writer cap, deploy style, how a deploy is proved, the liveness URL, exclusive paths, the `.env.local` key allowlist, traps |
+| `POLICY.md` | one row per repo: writer cap, deploy style, how a deploy is proved, the liveness URL, exclusive paths, traps. Its `env` table names the `.env.local` keys a new worktree may receive; a repo with no row there receives none |
 | `PREFIXES.md` | the filename vocabulary. An unrecognized lifecycle word routes nothing and is named on stdout, rather than defaulting to live |
 | `CLAIMS.md` | the visible lock, one line per active lane. Ships empty |
 | `LANES.md` | the append-only ledger of every lane opened, landed and closed. Ships empty |
@@ -322,13 +322,16 @@ Three more things are configuration rather than code, and each ships empty or ne
 Read this before wiring anything in. None of it is hidden in the code, and none of it should be a
 surprise on the day it matters.
 
-- **`open` copies the repo's `.env.local` into every worktree it creates**, mode 600, never
-  overwriting one that is already there. It copies the whole file, unless the repo has a row in
-  the policy's `env` table naming an allowlist; then only those keys are copied, and a listed key
-  the file lacks is reported missing by name rather than written empty. A fresh checkout has no
-  credential otherwise and a lane fails cold on its first job. The cost is that a credential file,
-  or the allowed slice of one, now exists once per checkout; removing a worktree by hand leaves its
-  copy behind unless you delete it too.
+- **`open` copies a credential into a new worktree only when the policy names the keys, and
+  copies nothing otherwise.** A repo with no row in the policy's `env` table gets no `.env.local`
+  at all, and `open` says so in one line naming the row to add. With a row, exactly those keys are
+  copied and nothing else: comments and unlisted keys are dropped, and a listed key the file lacks
+  is reported missing by name rather than written empty. The copy is created at mode 600 — created
+  private, not made private a moment later — and an existing `.env.local` in the worktree is never
+  overwritten. The cost of switching it on is that the allowed slice of a credential file then
+  exists once per checkout; removing a worktree by hand leaves that slice behind unless you delete
+  it too. The cost of leaving it off is that a lane whose first job needs a credential fails until
+  you add the row.
 - **The state directory carries a lock file, `_handoffs/_lanes/.lock`.** Every write to
   `CLAIMS.md` and `LANES.md` happens while one process holds it, and `open` re-checks the board
   under it, so two dispatchers opening overlapping lanes at the same moment get one open and one

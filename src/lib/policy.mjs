@@ -170,10 +170,12 @@ export function loadPolicy(root) {
 
   // ENV (Router ENV1, 2026-09-14). A per-repo allowlist of `.env.local` variable NAMES — never
   // values, only names, and this file never sees a value — that `lane-open` copies into a fresh
-  // worktree. OPTIONAL, in the same shape as `exclusive` and `traps` above: a repo absent from this
-  // table gets today's behaviour, unchanged — the whole file is copied. A repo present here gets
-  // ONLY the named keys; see copyEnvFile in bin/lane-open.mjs for the disk half and what happens to
-  // a listed key the source file lacks. `keys` is a space-separated list read straight off the row.
+  // worktree. OPTIONAL, in the same shape as `exclusive` and `traps` above, and this table is the
+  // ONLY thing that makes a copy happen: a repo absent from it keeps `env: null` and gets NOTHING,
+  // which is the safe default — a credential leaves the repository only because somebody wrote its
+  // name down here. A repo present gets exactly the named keys; see copyEnvFile in
+  // bin/lane-open.mjs for the disk half and what happens to a listed key the source file lacks.
+  // `keys` is a space-separated list read straight off the row.
   if (/<!--\s*table:\s*env\s*-->/i.test(text)) {
     for (const e of readTable(text, 'env')) {
       const rec = repos.get(e.repo);

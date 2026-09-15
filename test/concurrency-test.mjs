@@ -51,6 +51,11 @@ const CLOSE = path.join(REPO, 'src', 'bin', 'close.mjs');
 const LANES_MJS = pathToFileURL(path.join(REPO, 'src', 'lib', 'lanes.mjs')).href;
 const LOCK_MJS = pathToFileURL(path.join(REPO, 'src', 'lib', 'lock.mjs')).href;
 const BRIEF = 'Web-CEILING1-Raise-The-Per-Provider-Cap.md';
+// `--import` takes a module SPECIFIER, not a filesystem path: on Windows a raw `D:\a\...\x.mjs`
+// does not start with `/`, `./` or `../`, so Node's loader reads it as a bare specifier (a package
+// name) and fails with an unrelated-looking `node:internal/modules/esm/load` error rather than
+// loading the file. A `file://` URL resolves identically on every platform.
+const FAKE_LOCK_PRELOAD = pathToFileURL(path.join(HERE, 'fake-windows-lock-error.mjs')).href;
 
 import { parseClaims } from '../src/lib/claims.mjs';
 import { parseLanes } from '../src/lib/lanes.mjs';
@@ -93,11 +98,11 @@ const activeClaims = (ws) => parseClaims(claimsOf(ws)).rows.filter((r) => !r.mal
 const openRows = (ws, lane) => lanesOf(ws).split('\n').filter((l) => l.startsWith(`OPEN | ${lane} |`));
 
 /** Run one child to completion. Resolves, never rejects: the exit code is the assertion's business. */
-function run(args, ws, { timeoutMs = 30_000 } = {}) {
+function run(args, ws, { timeoutMs = 30_000, env = {} } = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, args, {
       cwd: ws,
-      env: { ...process.env, PANDORAS_ROOT: ws },
+      env: { ...process.env, PANDORAS_ROOT: ws, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -153,6 +158,65 @@ T('RED-PROOF double-open: two processes open lanes with intersecting scopes — 
     assert.equal(claims.length, 1, `one active claim, got ${claims.length}`);
     assert.equal(claims[0].chat, ok[0].chat);
     assert.equal(openRows(ws, 'ceiling1').length, 1, 'one OPEN row for the lane');
+    assert.ok(!fs.existsSync(lockFileOf(ws)), 'no lock left behind');
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------- CONCFLAKE1: Windows create-exclusive
+// Reproduces the two shapes CI actually lost on windows-latest/Node 24, 2026-09-15, by faking a
+// non-EEXIST error out of `fs.openSync(lockPath, 'wx')` via fake-windows-lock-error.mjs (see that
+// file's header) — the shape a Windows sharing violation would surface as, which this Mac cannot
+// produce for real. Both races below are the SAME two tests above, run with the fault injected;
+// the assertions are identical to double-open's and claim-take's, so this proves the fix handles
+// the fault without loosening either original assertion.
+T('RED-PROOF windows contention (double-open shape): one child hits a non-EEXIST error from the exclusive-create on its first attempt — exactly one open still succeeds, the other is still refused by name', async () => {
+  const ws = makeWorkspace();
+  try {
+    const chatA = 'Web CEILING1 (dispatch A)';
+    const chatB = 'Web CEILING1 (dispatch B)';
+    const release = lock ? lock.acquireLock(ws) : null;
+    const pa = run(['--import', FAKE_LOCK_PRELOAD, LANE_OPEN, BRIEF, '--chat', chatA], ws, {
+      env: { FAKE_LOCK_ERROR_CODE: 'EPERM', FAKE_LOCK_ERROR_CALLS: '1' },
+    });
+    const pb = run([LANE_OPEN, BRIEF, '--chat', chatB], ws);
+    if (release) { await sleep(3000); release(); }
+    const [ra, rb] = await Promise.all([pa, pb]);
+    const both = [{ ...ra, chat: chatA }, { ...rb, chat: chatB }];
+    const ok = both.filter((r) => r.status === 0);
+    const refused = both.filter((r) => r.status !== 0);
+    assert.equal(
+      ok.length, 1,
+      `exactly one open may succeed; ${ok.length} did (A exit ${ra.status}, B exit ${rb.status}). `
+      + `A stderr: ${ra.stderr.split('\n')[0]}`,
+    );
+    assert.equal(refused.length, 1);
+    assert.match(refused[0].stderr, /lane-open REFUSED/, `the refused side must print a refusal, not crash uncaught — got: ${refused[0].stderr.split('\n')[0]}`);
+    assert.match(refused[0].stderr, rx(ok[0].chat));
+    assert.ok(!fs.existsSync(lockFileOf(ws)), 'no lock left behind');
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+T('RED-PROOF windows contention (claim-take shape): BOTH children hit a non-EEXIST error from the exclusive-create on their first attempt — exactly one claim is still TAKEN, not zero', async () => {
+  const ws = makeWorkspace();
+  try {
+    const release = lock ? lock.acquireLock(ws) : null;
+    const pa = run(['--import', FAKE_LOCK_PRELOAD, CLAIM, 'take', 'repo-a', '--as', 'Direct A', '--why', 'racing'], ws, {
+      env: { FAKE_LOCK_ERROR_CODE: 'EBUSY', FAKE_LOCK_ERROR_CALLS: '1' },
+    });
+    const pb = run(['--import', FAKE_LOCK_PRELOAD, CLAIM, 'take', 'repo-a', '--as', 'Direct B', '--why', 'racing'], ws, {
+      env: { FAKE_LOCK_ERROR_CODE: 'EBUSY', FAKE_LOCK_ERROR_CALLS: '1' },
+    });
+    if (release) { await sleep(800); release(); }
+    const [ra, rb] = await Promise.all([pa, pb]);
+    const taken = [ra, rb].filter((r) => /claim TAKEN/.test(r.stdout));
+    const refused = [ra, rb].filter((r) => /writer cap/.test(r.stderr));
+    assert.equal(taken.length, 1, `exactly one TAKEN; got ${taken.length} (A exit ${ra.status}, B exit ${rb.status}); A stderr: ${ra.stderr.split('\n')[0]}; B stderr: ${rb.stderr.split('\n')[0]}; active claims on disk: ${activeClaims(ws).length}`);
+    assert.equal(refused.length, 1, `the other must be refused at the writer cap, not crash uncaught; A stderr: ${ra.stderr.split('\n')[0]}; B stderr: ${rb.stderr.split('\n')[0]}`);
+    assert.equal(activeClaims(ws).length, 1);
     assert.ok(!fs.existsSync(lockFileOf(ws)), 'no lock left behind');
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });

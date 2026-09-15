@@ -42,6 +42,11 @@ function initRepo(dir) {
   sh(dir, ['init', '-q', '-b', 'main']);
   sh(dir, ['config', 'user.name', 'Revert Test']);
   sh(dir, ['config', 'user.email', 'revert-test@example.com']);
+  // Windows CI runners default core.autocrlf to true, so a checkout or a revert silently rewrites
+  // this fixture's LF-only file.txt to CRLF and the byte comparisons below go red on nothing this
+  // lane's own code did. Off, so the fixture reads back exactly the bytes it was written with on
+  // every OS — the same reason the build gate's own suite is platform-honest (see build-gate-test.mjs).
+  sh(dir, ['config', 'core.autocrlf', 'false']);
 }
 
 /**

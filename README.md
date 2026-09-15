@@ -27,11 +27,13 @@ touch, and the report's own words. Files and git, nothing else.
 From the repo root:
 
 ```
+npm ci --ignore-scripts
 npm test
 ```
 
-CI runs this same command on every push and pull request, on Node 22 and 24, on Ubuntu, macOS and
-Windows (six matrix cells, `.github/workflows/ci.yml`).
+CI runs those same two commands on every push and pull request, on Node 22 and 24, on Ubuntu,
+macOS and Windows (six matrix cells, `.github/workflows/ci.yml`). The install is only for the type
+check at the end; see [Install](#install) for what it fetches and what pins it.
 
 Every suite prints its own assertion count as it runs, and how many of those are red-proof: each
 asserts a refusal, or that a weakening turns the suite red, so deleting a guard turns them red
@@ -44,10 +46,10 @@ the scope property suite (six properties over thousands of generated cases).
 
 The runner discovers its suites: every `*-test.mjs` file in `test/` runs, so a new suite needs no
 list edited. After the suites, `npm test` runs `npm run typecheck`, which holds the JSDoc in every
-file to the code it describes. The checker is fetched on first run through npx at pinned versions
-(TypeScript 6.0.3 and Node 22 type declarations) into npx's cache, so the package still has zero
-dependencies. Every file under `src/` and `hooks/` starts with `// @ts-check`, so an editor with
-Node types available checks it as you type.
+file to the code it describes. That check needs the TypeScript compiler and Node's type
+declarations, so run `npm ci --ignore-scripts` once before `npm test`; both are dev dependencies
+pinned to an exact version and the run itself downloads nothing. Every file under `src/` and
+`hooks/` starts with `// @ts-check`, so an editor with Node types available checks it as you type.
 
 Most measurements quoted in the code's comments are from the tool's first four weeks in use on
 one operator's board: 511 lane closes across the 25 days from 18 August to the day it was
@@ -249,15 +251,34 @@ than either half on its own, is what this fills.
 
 Node 22 or newer, per the `engines` field. Verified here on Node 25.9.0.
 
-Zero npm dependencies: Node builtins and `git`. No build step, no lockfile to audit, nothing to
-install before `npm test` runs. The type check at the end of `npm test` fetches TypeScript through
-npx on its first run, so that one step needs the network once.
+**What the tool itself depends on, and what you are trusting when you install it.** At run time:
+nothing but Node's own built-in modules and the `git` already on your machine. The `dependencies`
+field is empty and there is no build step, so nothing third-party executes when the router runs.
+
+Two dev-only packages exist, and they are there for one job — the type check at the end of
+`npm test`. Both are pinned to an exact version, never a range:
+
+| package | version | what it is for |
+|---|---|---|
+| `typescript` | 6.0.3 | the compiler that checks the JSDoc against the code |
+| `@types/node` | 22.20.2 | Node's own type declarations, so `fs` and `path` are known |
+
+`package-lock.json` is committed, so those two and their one transitive package (`undici-types`)
+are recorded with the exact tarball URL and integrity hash that were reviewed. `npm ci` installs
+that file and nothing else, and fails outright if the manifest and the lockfile disagree.
+`--ignore-scripts` means no package's install hooks run. Both flags are what CI uses, on every
+one of the six matrix cells.
 
 ```
 git clone https://github.com/hoplight-ai/pandoras-router
 cd pandoras-router
+npm ci --ignore-scripts
 npm test
 ```
+
+The install is the only step that touches the network. If you would rather not run it, `node
+test/run.mjs` runs the whole assertion suite on its own with nothing installed; only the type
+check needs the compiler.
 
 The package declares a `pandoras-router` binary pointing at `src/bin/router.mjs`, so an install or
 a link puts that name on your path. Running `node src/bin/router.mjs <subcommand>` from the repo

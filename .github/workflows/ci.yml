@@ -28,13 +28,16 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      # This package has zero runtime or dev dependencies (no package-lock.json, nothing to
-      # fetch), so there is nothing for `npm ci` to do. The step still exists, with this id, so
-      # the condition below has something to read — the same shape every other workflow in this
-      # workspace uses to keep a red gate from hiding the ones behind it.
+      # Zero RUNTIME dependencies, two dev ones: the TypeScript compiler and Node's type
+      # declarations, both pinned to an exact version and recorded with an integrity hash in the
+      # committed package-lock.json. `npm ci` installs exactly what that file names and fails if
+      # the manifest and the lockfile disagree, so a run cannot quietly pick up a version nobody
+      # reviewed. `--ignore-scripts` means no package's install hooks execute here. The step keeps
+      # this id so the condition below has something to read — the same shape every other workflow
+      # in this workspace uses to keep a red gate from hiding the ones behind it.
       - name: install
         id: install
-        run: echo "zero dependencies, nothing to install"
+        run: npm ci --ignore-scripts
 
       # `npm test` runs the assertion suite (test/run.mjs) and then the type check.
       - name: test

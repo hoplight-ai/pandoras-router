@@ -260,9 +260,7 @@
 
         <blockquote>
           <p>A skip is not a pass. Neither <code>n/a</code> nor <code>exempt</code> claims the build was
-          verified, and every close that records one says so in words. In an old ledger row a
-          <code>-</code> means the gate did not exist when that line was written, which is not a pass
-          either.</p>
+          verified, and every close that records one says so in words.</p>
         </blockquote>
       </section>
 
@@ -270,48 +268,47 @@
         <h2>The seven gates a close measures</h2>
 
         <p>DONE requires all seven. Anything else is PARTIAL, with the failing gates named in the reason
-        line, so a lane cannot report DONE and then list a barred step underneath it.</p>
+        line, so a lane can't report DONE and then list a barred step underneath it.</p>
 
         <h3>merged</h3>
 
-        <p>Refuses a branch whose content is not on main. It compares the blob of every path the branch
+        <p>Refuses a branch whose content isn't on main. It compares the blob of every path the branch
         touched in three trees: the merge base, the branch, and <code>origin/main</code>. Not git
         ancestry, because a squash merge copies a branch's changes onto main and throws the commit
-        fingerprints away, so <code>git branch --merged</code> says "not merged" about work that is fully
-        shipped. A path that main moved under the branch is reported as moved rather than graded either
-        way. A lane with no branch, running in place on a target that is not a git repository, records
+        fingerprints away, so <code>git branch --merged</code> says "not merged" about work that's fully
+        shipped. A lane with no branch, running in place on a target that isn't a git repository, records
         <code>n/a</code>.</p>
 
         <h3>green</h3>
 
-        <p>Refuses a build that was not observed green: <code>npm run build</code> in the lane's own
+        <p>Refuses a build that wasn't observed green: <code>npm run build</code> in the lane's own
         checkout, exit 0. Running the close with <code>--no-build</code> records <code>skip</code>, not a
-        pass, so choosing not to build cannot produce a DONE.</p>
+        pass, so choosing not to build can't produce a DONE.</p>
 
         <h3>live</h3>
 
-        <p>Refuses a deployment that was not proved to be serving this build. The close issues a GET at
+        <p>Refuses a deployment that wasn't proved to be serving this build. The close issues a GET at
         the URL the repo's policy row names and reads the body. Two proof forms:</p>
 
         <ul>
           <li>A commit echo: the deployment reports its own release, and the gate requires it to equal or
-          contain the branch head. This is the only form that cannot pass on stale bytes.</li>
+          contain the branch head. This is the only form that can't pass on stale bytes.</li>
           <li>A proof string that must appear in the response. The gate <strong>refuses a proof string
-          that is not new in this branch's own diff</strong>. A string already on main proves nothing
+          that isn't new in this branch's own diff</strong>. A string already on main proves nothing
           about whether this deploy landed, and an assertion every build passes is not an
           assertion.</li>
         </ul>
 
         <p>Credentials are named, never stored. A policy row carries the name of an environment variable;
         the value is read at probe time and never printed, not in a verdict and not in an error. If the
-        variable is unset the probe is not sent bare, because grading the resulting 401 would measure the
+        variable is unset the probe isn't sent bare, because grading the resulting 401 would measure the
         credential rather than the deployment. That case is a <code>skip</code> naming the variable.</p>
 
         <h3>renamed</h3>
 
         <p>Refuses a brief that still carries no closed prefix, because the next dispatch will read it as
         live and fire it a second time. The lane id has to appear in the brief's filename as a whole
-        hyphen-delimited token, never as a substring, so lane <code>ops-l1</code> does not match a file
+        hyphen-delimited token, never as a substring, so lane <code>ops-l1</code> doesn't match a file
         belonging to <code>ops-l14</code>.</p>
 
         <h3>in-scope</h3>
@@ -332,7 +329,7 @@
         <p>A line missing the fix, a valid size, or an owner fails the gate and is quoted back verbatim.
         A report with zero findings passes: the gate polices completeness, never quantity. A
         <code>small</code> finding assigned to the human owner is refused outright, because a small thing
-        the lane could have done itself is not a decision to hand upward.</p>
+        the lane could have done itself isn't a decision to hand upward.</p>
 
         <h3>no-side-files</h3>
 
@@ -340,19 +337,17 @@
         <code>SWEEP-*.md</code>, <code>TRIAGE-*.md</code>. The project already has a tracker, and a second
         static surface beside it is a place for facts to go stale.</p>
 
-        <p>A window is not an attribution. Many lanes run at once, so a matching file counts against a
+        <p>A window is not an attribution: many lanes run at once, so a matching file counts against a
         lane only if its body names the lane or the brief's title, or it sits in the lane's own branch
-        diff, or the lane's own report names it. A file that appeared during the window and matches none
-        of the three prints one warning line and does not fail the gate. The opt-out is explicit and
-        printed, never inferred: a <code>Side-file: allowed</code> line in the brief's header makes the
-        gate <code>n/a</code>.</p>
+        diff, or the lane's own report names it. The opt-out is printed, never inferred: a
+        <code>Side-file: allowed</code> line in the brief's header makes the gate <code>n/a</code>.</p>
       </section>
 
       <section>
         <h2>Three gates the grader supports and this driver does not measure</h2>
 
         <p>Named here so their absence is visible rather than mistaken for a pass. The grader accepts a
-        verdict for each; the shipped close driver records them as not measured, and they do not affect
+        verdict for each; the shipped close driver records them as not measured, and they don't affect
         the grade.</p>
 
         <div class="scroll">
@@ -364,7 +359,7 @@
               <tr>
                 <td class="gate">owner-way-in</td>
                 <td>A live deployment the owner's stored credential no longer opens. When it fails it
-                leads the reason line, ahead of every other failure: a product the owner cannot open is
+                leads the reason line, ahead of every other failure: a product the owner can't open is
                 the first sentence, not a line item.</td>
               </tr>
               <tr>
@@ -385,7 +380,7 @@
       <section id="aborts">
         <h2>Three refusals that stop a close entirely</h2>
 
-        <p>These are not gates. A failing gate makes the close PARTIAL and the close still happens. These
+        <p>These aren't gates. A failing gate makes the close PARTIAL and the close still happens. These
         three abort it: nothing is recorded, nothing is renamed, no worktree is removed, no claim is
         released, and the same is true on a dry run. The disagreement is between the report and itself,
         and no grade can be recorded honestly until a person resolves it.</p>
@@ -449,25 +444,23 @@
               </tr>
               <tr>
                 <td>No policy row</td>
-                <td>A repo that is not in the policy table routes nothing. Guessing its deploy style or
+                <td>A repo that isn't in the policy table routes nothing. Guessing its deploy style or
                 verification method is how a change ships that nobody proved.</td>
               </tr>
               <tr>
                 <td>No readable target</td>
-                <td>A brief whose routing block names no repo is not carded, and the router will not
-                infer the target from the prose.</td>
+                <td>A brief whose routing block names no repo isn't carded, and the router won't infer
+                the target from the prose.</td>
               </tr>
               <tr>
                 <td>Unrecognized filename word</td>
-                <td>The lifecycle vocabulary lives in a file. An unknown word routes nothing and is
-                printed with the word it should have been. Three detectors catch the dangerous cases: a
-                denied list of synonyms, any unlisted past participle, and any token within one character
-                of a real one. A typo in a lifecycle word would otherwise resurrect a closed brief.</td>
+                <td>An unknown word routes nothing and is printed with the word it should have been, so a
+                near-miss is caught rather than resurrecting a closed brief.</td>
               </tr>
               <tr>
                 <td>Already closed</td>
                 <td>A brief whose lane already filed a CLOSE record is finished work wearing a live
-                filename. It is refused unless its header declares that it is meant to refire, and the
+                filename. It's refused unless its header declares that it's meant to refire, and the
                 card says so in both directions.</td>
               </tr>
               <tr>
@@ -477,7 +470,7 @@
               </tr>
               <tr>
                 <td>Held until a date</td>
-                <td>A brief with a not-before date stays visible and carded the whole time it is held,
+                <td>A brief with a not-before date stays visible and carded the whole time it's held,
                 rather than disappearing from the board on the day somebody needs to see it.</td>
               </tr>
               <tr>

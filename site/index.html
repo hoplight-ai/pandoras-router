@@ -215,20 +215,15 @@
     <div class="read">
 
       <section>
-        <p>Every tool in this category that I compared, fourteen at the time of writing, solves parallel agents with isolation. Give each agent its own git
-        worktree or its own container and they stop fighting over one working directory. That is real,
-        and it is not enough. Two agents in two copies can still rewrite the same file, and nothing
+        <p>Most of the field solves parallel agents with isolation. Give each agent its own git
+        worktree or its own container and they stop fighting over one working directory. That's real,
+        and it isn't enough. Two agents in two copies can still rewrite the same file, and nothing
         notices until the merge, by which point both pieces of work exist and one of them has to lose.</p>
 
         <p>The second half is quieter. An agent's report that it finished is the least reliable signal in
-        the system, and it is the one almost every orchestrator takes at face value. Merged is not
+        the system, and it's the one almost every orchestrator takes at face value. Merged is not
         shipped. A green build is not a served page. A change nobody can see in a browser is
         indistinguishable from success until somebody looks.</p>
-
-        <p>So this does two things: it compares declared file scopes before dispatch and refuses the
-        overlaps, then after the work it measures the content on main, the build, the deployed URL, the
-        files the branch actually touched, and the report's own words. Files and git. No service, no
-        database, no dependencies.</p>
       </section>
 
       <section id="before">
@@ -249,7 +244,7 @@
         </blockquote>
 
         <p><code>Touches: none</code> is a different claim: that lane writes no repo file, holds no
-        writer slot, blocks nobody, and its close fails by name if it writes one. Where a scope cannot be
+        writer slot, blocks nobody, and its close fails by name if it writes one. Where a scope can't be
         compared exactly, a mid-path glob for instance, it widens to the parent directory. Widening
         over-reports overlap, which costs a wait. Narrowing would under-report it, which costs somebody's
         work, so narrowing is never done.</p>
@@ -259,10 +254,8 @@
         can declare those exclusive. A lane touching one holds that path alone and leaves the rest of the
         repo open to everybody else.</p>
 
-        <p>The declaration is written into the ledger when the lane opens, which is what lets a second
-        lane be proved disjoint from a running one instead of assumed to collide. The close then checks
-        every file the branch actually touched against that same declaration, so the promise has teeth at
-        both ends.</p>
+        <p>The declaration is written into the ledger when the lane opens, and the <a href="gates.html#gates">in-scope
+        gate</a> later checks every file the branch actually touched against it.</p>
       </section>
 
       <section id="after">
@@ -273,7 +266,7 @@
         STATUS word, can only lower the grade: a report that says PARTIAL in its own words is never
         graded DONE by gates that happened to pass.</p>
 
-        <p>One of those gates is the one none of those fourteen runs. Every other check asks a
+        <p>One of those gates is the one none of the tools compared runs. Every other check asks a
         question about the repository, and all of them can be true while the page a person opens is last
         week's build. So the close issues a GET and reads what came back. It returns three values, not
         two:</p>
@@ -281,18 +274,15 @@
         <ul class="verdicts">
           <li><span class="v">yes</span> <span>The surface answered 200 and carried what it was supposed to
           carry.</span></li>
-          <li><span class="v">no</span> <span>The surface answered and it is not serving this build. A real
+          <li><span class="v">no</span> <span>The surface answered and it isn't serving this build. A real
           red.</span></li>
           <li class="hard"><span class="v">skipped</span> <span>Nothing was measured, for a named reason. A
           skip is never a pass, and the grader counts it as a failure.</span></li>
         </ul>
 
         <p>No URL in policy, a named credential that is unset, a socket that never answered: each of
-        those measured nothing. A gate that printed a soft dash for them would teach everybody to read
-        the column as green, which is the failure mode that makes a liveness check worthless. So the
-        value is the literal word <code>skipped</code>, the reason is always named, and the sentence
-        "Nothing was measured, and a skip is not a pass" is part of the output rather than a
-        convention.</p>
+        those measured nothing. The value is the literal word <code>skipped</code> and the reason is
+        always named.</p>
 
         <p><a href="gates.html">Every gate, and what each one refuses.</a></p>
       </section>
@@ -357,7 +347,7 @@ PANDORAS_ROOT=/tmp/pandoras-demo node src/bin/router.mjs alloc</code></pre>
               </tr>
               <tr>
                 <td class="gate">CLAIMS.md</td>
-                <td>The visible lock, one line per active lane. A clean working tree does not prove
+                <td>The visible lock, one line per active lane. A clean working tree doesn't prove
                 absence; an agent can be open and mid-read for twenty minutes before its first edit.
                 Ships empty.</td>
               </tr>
@@ -369,9 +359,6 @@ PANDORAS_ROOT=/tmp/pandoras-demo node src/bin/router.mjs alloc</code></pre>
             </tbody>
           </table>
         </div>
-
-        <p>Guessing a deploy style or a verification method is how a change ships that nobody proved, so
-        the router does not guess. It refuses and names what is missing.</p>
       </section>
 
       <section>
@@ -397,12 +384,13 @@ PANDORAS_ROOT=/tmp/pandoras-demo node src/bin/router.mjs alloc</code></pre>
       <section>
         <h2>Prior art</h2>
 
-        <p>Worth saying plainly, because the honest version is more useful than a claim of novelty. Most
-        of the field solves parallel agents with isolation alone, and this project does not improve on
-        that. Two projects go further.</p>
+        <p>Most of the field solves parallel agents with isolation alone, and this project doesn't
+        improve on that. Two of the three entries written up go further, but none did both
+        scope-before-dispatch and verify-after, and none checked that a merged change is actually live at
+        a URL. That gap, rather than either half on its own, is what this fills.</p>
 
         <p><a href="https://github.com/sipyourdrink-ltd/bernstein">Bernstein</a> does declare owned files,
-        refuse overlapping jobs, and verify completions. It is the closest thing to this that exists, and
+        refuse overlapping jobs, and verify completions. It's the closest thing to this that exists, and
         it got there first. The differences are in where each one puts the burden of proof. Bernstein is
         demoting file-overlap checking to a legacy fallback in favour of an author-declared
         <code>parallel_safe</code> flag; it infers a job's file scope from the task's wording when none is
@@ -413,15 +401,11 @@ PANDORAS_ROOT=/tmp/pandoras-demo node src/bin/router.mjs alloc</code></pre>
         claim that one design is correct.</p>
 
         <p><a href="https://github.com/Untrivial-ai/agent-orchestrator">Agent Orchestrator</a> never
-        stores a status at all. It recomputes state from pull-request and CI facts every time it is
-        asked, so a stored status can never go stale against reality. That is a cleaner idea than a
+        stores a status at all. It recomputes state from pull-request and CI facts every time it's
+        asked, so a stored status can never go stale against reality. That's a cleaner idea than a
         ledger and worth reading for its own sake. This project keeps an append-only ledger instead,
         because it needs a lane's declared scope and its open timestamp recorded at the moment of
         dispatch, which no PR or CI fact carries.</p>
-
-        <p>Of the fourteen tools compared, none did both scope-before-dispatch and
-        verify-after, and none checked that a merged change is actually live at a URL. That gap, rather
-        than either half on its own, is what this fills.</p>
       </section>
 
     </div>

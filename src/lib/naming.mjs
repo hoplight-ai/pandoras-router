@@ -16,10 +16,34 @@
 
 const LANE_TOKEN = /^([A-Za-z]+)(\d+)$/;
 
+// A LEADING DATE IS NEVER A LANE NAME.
+//
+// `laneIdFor` looks for a word carrying a digit and falls back to the first two words when it finds
+// none. A brief named `2026-09-09-web-mothball-the-uptime-schedule.md` carries no such word
+// anywhere, so that fallback ran with the date still at the front of the stem and returned
+// `2026-09`. A second brief filed the same month fell into the same fallback the same way and got
+// the same lane id — two unrelated lanes with one identifier. The close matches a brief filename by
+// lane id as a whole token, so one lane's close could rename the other lane's brief and the landing
+// record could name the wrong brief. Measured on the sibling tree this module was extracted from:
+// two dispatches opened lane `2026-09` in two repositories in the same minute.
+//
+// So a leading ISO date — `YYYY-MM-DD`, or a bare `YYYY-MM` with no day — is skipped before either
+// function looks for a lane token or falls back to the first two words.
+//
+// ONLY AT THE FRONT. `Transcripts-SYNC-2026-09-12-catch-up.md` carries a date in the middle of its
+// name and keeps deriving from `Transcripts-SYNC` exactly as before. "Remove any date anywhere"
+// would be a second, sloppier defect: the middle of a filename is the part an author chose.
+function leadingIsoDateSkip(parts) {
+  if (parts.length >= 3 && /^\d{4}$/.test(parts[0]) && /^\d{2}$/.test(parts[1]) && /^\d{2}$/.test(parts[2])) return 3;
+  if (parts.length >= 2 && /^\d{4}$/.test(parts[0]) && /^\d{2}$/.test(parts[1])) return 2;
+  return 0;
+}
+
 /** `Catalogue-L1-Decision-Queue.md` -> `catalogue-l1`; `Web-CEILING1-...` -> `ceiling1`. */
 export function laneIdFor(filename) {
   const stem = filename.replace(/\.md$/i, '');
-  const parts = stem.split('-').filter(Boolean);
+  const all = stem.split('-').filter(Boolean);
+  const parts = all.slice(leadingIsoDateSkip(all));
   for (let i = 0; i < parts.length; i++) {
     const m = LANE_TOKEN.exec(parts[i]);
     if (!m) continue;
@@ -34,7 +58,8 @@ export function laneIdFor(filename) {
 /** The words after the lane token, at most three, for a branch that reads like something. */
 export function slugFor(filename) {
   const stem = filename.replace(/\.md$/i, '');
-  const parts = stem.split('-').filter(Boolean);
+  const all = stem.split('-').filter(Boolean);
+  const parts = all.slice(leadingIsoDateSkip(all));
   let at = parts.findIndex((p) => LANE_TOKEN.test(p));
   if (at < 0) at = 0;
   const tail = parts.slice(at + 1, at + 4).map((w) => w.toLowerCase().replace(/[^a-z0-9]/g, ''));

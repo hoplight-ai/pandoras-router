@@ -3137,28 +3137,33 @@ T('RED-PROOF policy build column: every shell metacharacter is refused at parse 
   }
 });
 
-T('RED-PROOF policy build column: the shipped example policy has no build column, so every repo in it keeps the npm path unchanged', () => {
-  // The backward-compatibility assertion, read off the document this project ships rather than off
-  // a fixture written to agree with the parser.
-  const shipped = fs.readFileSync(path.join(HERE, '..', 'examples', 'POLICY.md'), 'utf8');
-  const rows = readTable(shipped, 'repos');
-  assert.ok(rows.length >= 4, `premise: the example repos table still has its rows (${rows.length})`);
-  for (const r of rows) {
-    assert.equal(parseBuild(r.repo, r.build), r.build === undefined || r.build === '-' ? null : parseBuild(r.repo, r.build));
-    if (r.build === undefined) assert.equal(parseBuild(r.repo, r.build), null, `repo ${r.repo} no longer parses to the npm path`);
-  }
-  // A repos table with no build column at all: today's document, parsed today's way.
+T('RED-PROOF policy build column: a repos table written before this column existed parses exactly as it did, and the shipped example shows both a declared command and a `-`', () => {
+  // The backward-compatibility assertion. A table with no build column at all leaves every row's
+  // value undefined, which is the npm path — the shape of every policy document written before
+  // 2026-09-15, and the reason this column could be added without touching one of them.
   const today = [
     '<!-- table: repos -->',
     '',
     '| repo | tier | writers | dispatch | port | deploy | verify | url |',
     '|---|---|---|---|---|---|---|---|',
     '| `web` | 1 | 3 | product | 5173 | push | `string` | https://web.example.com |',
+    '| `docs` | 3 | 1 | infra | - | push | `none` | - |',
     '',
   ].join('\n');
-  const [row] = readTable(today, 'repos');
-  assert.equal(row.build, undefined, 'a table with no build column must not invent one');
-  assert.equal(parseBuild(row.repo, row.build), null);
+  for (const row of readTable(today, 'repos')) {
+    assert.equal(row.build, undefined, 'a table with no build column must not invent one');
+    assert.equal(parseBuild(row.repo, row.build), null, `repo ${row.repo} no longer takes the npm path`);
+  }
+  // And the document this project ships, read rather than restated: both forms present, both parse.
+  const shipped = fs.readFileSync(path.join(HERE, '..', 'examples', 'POLICY.md'), 'utf8');
+  const rows = readTable(shipped, 'repos');
+  assert.ok(rows.length >= 4, `premise: the example repos table still has its rows (${rows.length})`);
+  const parsed = rows.map((r) => [r.repo, parseBuild(r.repo, r.build)]);
+  assert.ok(parsed.some(([, b]) => b === null), 'the example policy shows no repo built by npm');
+  const [repo, declared] = /** @type {any} */ (parsed.find(([, b]) => b !== null) ?? []);
+  assert.ok(declared, 'the example policy shows no repo with a declared build command');
+  assert.equal(declared.command, 'cargo', `the declared example row for ${repo} changed shape`);
+  assert.deepEqual(declared.args, ['build', '--release']);
 });
 
 // ---------------------------------------------------------------- run

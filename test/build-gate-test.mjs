@@ -69,16 +69,20 @@ const baseEnv = () => {
 // `stale: true` lands a neighbour's commit on main after the branch was cut.
 const g = (dir, args) => execFileSync('git', ['-C', dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.test', '-c', 'commit.gpgsign=false', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
 
+/** The `web` row this suite's workspaces carry: no live probe, and npm as the build. */
+const WEB_ROW = '| `web` | 1 | 3 | product | 5173 | push | `none` | https://web.example.com | - |';
+
 function makeWorkspace({ stale = false } = {}) {
   const ws = real(fs.mkdtempSync(path.join(os.tmpdir(), 'pandoras-build-')));
   const lanes = path.join(ws, '_handoffs', '_lanes');
   fs.mkdirSync(lanes, { recursive: true });
   for (const f of ['PREFIXES.md', 'CLAIMS.md', 'LANES.md']) fs.copyFileSync(path.join(EXAMPLES, f), path.join(lanes, f));
-  const row = '| `web` | 1 | 3 | product | 5173 | push | `sha:/api/status:release` | https://web.example.com |';
+  const row = '| `web` | 1 | 3 | product | 5173 | push | `sha:/api/status:release` | https://web.example.com | - |';
   const src = fs.readFileSync(path.join(EXAMPLES, 'POLICY.md'), 'utf8');
   assert.ok(src.includes(row), 'premise: the example policy row for web is still spelled as this suite expects');
   // verify `none`: the live gate sends no request, so this suite never reaches the network.
-  fs.writeFileSync(path.join(lanes, 'POLICY.md'), src.replace(row, '| `web` | 1 | 3 | product | 5173 | push | `none` | https://web.example.com |'));
+  // build `-`: npm, which is what every assertion outside the declared-command section measures.
+  fs.writeFileSync(path.join(lanes, 'POLICY.md'), src.replace(row, WEB_ROW));
 
   const web = path.join(ws, 'web');
   fs.mkdirSync(web);
@@ -326,37 +330,17 @@ T('fresh base: the same branch after merging main grades on its build', async ()
 // anything at all.
 
 /**
- * The example repos table with a `build` column added: `value` for `web`, `-` for every other repo.
- * Every other table in the document is untouched.
- * @param {string} src @param {string} value
- */
-function withBuildColumn(src, value) {
-  const at = src.indexOf('<!-- table: repos -->');
-  assert.ok(at >= 0, 'premise: the example policy still marks its repos table');
-  const head = src.slice(0, at);
-  const lines = src.slice(at).split('\n');
-  let seen = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const t = lines[i].trim();
-    if (!t.startsWith('|')) { if (seen) break; else continue; }
-    seen++;
-    if (seen === 1) lines[i] = `${t} build |`;
-    else if (seen === 2) lines[i] = `${t}---|`;
-    else lines[i] = `${t} ${t.includes('`web`') ? value : '-'} |`;
-  }
-  assert.ok(seen >= 3, `premise: the example repos table still has rows (${seen})`);
-  return head + lines.join('\n');
-}
-
-/**
  * A workspace whose policy declares a build command for `web`. `value` is the policy cell, built
- * from the workspace when it needs a path out of it.
+ * from the workspace when it needs a path out of it. Only the `web` row's build cell changes.
  * @param {string | ((w: ReturnType<typeof makeWorkspace>) => string)} value
  */
 function declaredWorkspace(value) {
   const w = makeWorkspace({});
   const file = path.join(w.ws, '_handoffs', '_lanes', 'POLICY.md');
-  fs.writeFileSync(file, withBuildColumn(fs.readFileSync(file, 'utf8'), typeof value === 'function' ? value(w) : value));
+  const src = fs.readFileSync(file, 'utf8');
+  assert.ok(src.includes(WEB_ROW), 'premise: the workspace policy still carries the web row this suite writes');
+  const declared = WEB_ROW.replace(/ - \|$/, ` ${typeof value === 'function' ? value(w) : value} |`);
+  fs.writeFileSync(file, src.replace(WEB_ROW, declared));
   return w;
 }
 

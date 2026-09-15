@@ -26,7 +26,7 @@ import { loadPrefixes, classifyBridge } from '../lib/prefixes.mjs';
 import { readClaims } from '../lib/claims.mjs';
 import { parseBrief } from '../lib/briefs.mjs';
 import { repoDirs, dirtyCount, git, repoDirFor } from '../lib/gitread.mjs';
-import { readLanes, orphanVerdict } from '../lib/lanes.mjs';
+import { readLanes, orphanVerdict, reportedUnlandedVerdict } from '../lib/lanes.mjs';
 import { allocate } from '../lib/alloc.mjs';
 import { withLock, lockDir } from '../lib/lock.mjs';
 import { todayLocal, reportNameForStatus } from '../lib/naming.mjs';
@@ -48,6 +48,25 @@ function laneBranchExists(root, lane) {
   const dir = repoDirFor(root, lane.repo);
   if (!fs.existsSync(path.join(dir, '.git'))) return true;
   return git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${lane.branch}`]) ? true : false;
+}
+
+/**
+ * UNLANDED2: is this lane's branch already merged into main? UNKNOWN answers FALSE, deliberately
+ * the opposite default from `laneBranchExists` above, because the two checks fail in opposite
+ * directions. A wrongly-TRUE `branchExists` manufactures an orphan out of a repo the probe simply
+ * could not read; that is the expensive direction there. Here, a wrongly-TRUE `branchLanded` would
+ * suppress `REPORTED-UNLANDED` on a lane that genuinely needs `pandoras-router land` — the exact
+ * silence this verdict exists to end. A wrongly-FALSE reading only prints an extra land command for
+ * a branch that turns out to already be merged, which `lane-land.mjs` itself reports as "already
+ * contained" and changes nothing. Same `--is-ancestor` direction `lane-land.mjs`'s
+ * `alreadyContained` already uses: the BRANCH is the ancestor being tested, `main` is where it must
+ * already appear.
+ */
+function laneBranchLanded(root, lane) {
+  if (!lane.branch || lane.branch === '-') return false;
+  const dir = repoDirFor(root, lane.repo);
+  if (!fs.existsSync(path.join(dir, '.git'))) return false;
+  return git(dir, ['merge-base', '--is-ancestor', lane.branch, 'main']) !== null;
 }
 
 function arg(args, name, dflt) {
@@ -81,7 +100,7 @@ export function gather({ root = ROOT, as = null, seat = null, limit = 8, date = 
   // lane-open can run exactly this half again INSIDE its lock, against the same briefs and policy,
   // and compare the card it gets with the one it was shown. See decide() below.
   const decided = decide({ root, policy, briefs, repoState, existingReports, limit, as, seat, date }, { lockRead });
-  const { claims, openLanes, orphans, cards, skipped, truncated } = decided;
+  const { claims, openLanes, orphans, reportedUnlanded, cards, skipped, truncated } = decided;
 
   // ONLY `scope` PARTIALS ARE FIREABLE REMAINDERS (Gov DELTA1, 2026-09-06, step 4's other half).
   // A `partial-` file is always ROUTED as `remainder` per PREFIXES.md — that vocabulary is
@@ -114,7 +133,7 @@ export function gather({ root = ROOT, as = null, seat = null, limit = 8, date = 
   // passed IN and dropped on the way out, which is why the line first rendered the placeholder
   // even when --seat was given. `root`, `limit`, `date` and `existingReports` are carried out for the
   // same additive reason: decide(r) needs them to re-run the allocation against the same inputs.
-  return { root, limit, date, existingReports, policy, vocab, bridge, claims, refused, briefs, documents, remainders, hiddenClerical, cards, skipped, truncated, repoState, openLanes, orphans, as, seat };
+  return { root, limit, date, existingReports, policy, vocab, bridge, claims, refused, briefs, documents, remainders, hiddenClerical, cards, skipped, truncated, repoState, openLanes, orphans, reportedUnlanded, as, seat };
 }
 
 /**
@@ -149,22 +168,37 @@ export function decide(r, { lockRead = true } = {}) {
   // touch the filesystem and git, which alloc.mjs deliberately cannot do — that is the whole reason
   // that module is testable without a repo. So this reads the world and passes lane names in.
   const orphans = new Map();
+  // UNLANDED2: computed ALONGSIDE the orphan probe, not instead of it — same lanes, same
+  // filesystem/git reads, one extra probe field (`branchLanded`) and one extra timestamp
+  // (`reportFiledMs`, the filed report's own mtime, read once here rather than re-derived by the
+  // verdict function).
+  const reportedUnlanded = new Map();
   for (const lane of openLanes) {
     if (lane.status !== 'OPEN') continue;
-    const v = orphanVerdict(lane, {
-      reportExists: lane.report && lane.report !== '-' ? existingReports.has(lane.report) : false,
+    const reportExists = lane.report && lane.report !== '-' ? existingReports.has(lane.report) : false;
+    let reportFiledMs = null;
+    if (reportExists) {
+      try { reportFiledMs = fs.statSync(path.join(root, '_handoffs', lane.report)).mtimeMs; } catch { /* unreadable — falls back to OPEN's own timestamp */ }
+    }
+    const probe = {
+      reportExists,
       worktreeExists: !lane.worktree || lane.worktree === '-' ? true : fs.existsSync(path.join(root, lane.worktree)),
       branchExists: laneBranchExists(root, lane),
+      branchLanded: laneBranchLanded(root, lane),
+      reportFiledMs,
       now: Date.now(),
-    });
+    };
+    const v = orphanVerdict(lane, probe);
     if (v) orphans.set(lane.lane, v);
+    const ru = reportedUnlandedVerdict(lane, probe);
+    if (ru) reportedUnlanded.set(lane.lane, ru);
   }
   const orphanedLanes = new Set(orphans.keys());
 
   const { cards, skipped, truncated } = allocate({
     briefs, policy, claims: claims.rows, repoState, existingReports, openLanes, orphanedLanes, limit, as, seat, date,
   });
-  return { ...r, claims, openLanes, orphans, cards, skipped, truncated };
+  return { ...r, claims, openLanes, orphans, reportedUnlanded, cards, skipped, truncated };
 }
 
 function remainderOf(root, name) {
@@ -178,7 +212,7 @@ function remainderOf(root, name) {
   return { name, hints };
 }
 
-function render(r) {
+export function render(r) {
   const L = [];
   L.push('LANE ALLOCATOR — ready-to-fire cards. Every field below is read from a file, not reasoned out.');
   L.push('  policy   _handoffs/_lanes/POLICY.md      prefixes  _handoffs/_lanes/PREFIXES.md');
@@ -203,6 +237,22 @@ function render(r) {
       L.push(`  ${lane}`);
       L.push(`      ${v.headline}`);
       L.push(`      close it properly (this runs the real gates): ${v.closeCmd}`);
+    }
+    L.push('');
+  }
+
+  // REPORTED-UNLANDED goes beside ORPHANED, not folded into it — UNLANDED2, 2026-09-15. This is
+  // work one command from done: the report is filed, only the branch still needs
+  // `pandoras-router land`.
+  if (r.reportedUnlanded?.size) {
+    L.push(`REPORTED-UNLANDED — ${r.reportedUnlanded.size}. A filed report whose branch has not landed in main yet.`);
+    L.push('  Distinct from ORPHANED: the work is not abandoned, it is one command from done.');
+    for (const [lane, v] of r.reportedUnlanded) {
+      const age = v.ageHoursSinceReport ?? v.ageHoursSinceOpen;
+      const ageWhen = v.ageHoursSinceReport != null ? 'since report filed' : v.ageHoursSinceOpen != null ? 'since OPEN (report mtime unreadable)' : 'unknown';
+      L.push(`  ${lane}`);
+      L.push(`      ${v.headline}${age != null ? `  [${age.toFixed(1)}h ${ageWhen}]` : ''}`);
+      L.push(`      land it: ${v.landCmd}`);
     }
     L.push('');
   }
@@ -260,6 +310,7 @@ function render(r) {
     [
       `CARDS-NOW\t${fireNow.length}`,
       `ORPHANED-LANES\t${r.orphans?.size ?? 0}`,
+      `REPORTED-UNLANDED\t${r.reportedUnlanded?.size ?? 0}`,
       `CARDS-QUEUED\t${queued.length}`,
       // A per-card UNDECLARED note is read by the lane that gets the card. This count is for whoever
       // is looking at a full queue wondering why nothing fires — on 2026-08-24 the answer was that

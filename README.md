@@ -2,7 +2,7 @@
 
 Built by Whit Pendergast at Hoplight (https://hoplight.ai).
 
-Site: https://pandoras-router.vercel.app
+Site: https://router.hoplight.ai
 
 Run many AI coding agents on one codebase at once: prove their declared file scopes disjoint
 before any of them start, then independently verify what each one claims it finished.
@@ -20,7 +20,7 @@ So this compares declared file scopes by path before dispatch and refuses to sta
 scopes intersect, then after the work measures the content on main, the build, the deployed URL, the
 files the branch actually touched against the files it said it would, and the report's own words.
 Files and git, nothing else. The argument in full is on the
-[site](https://pandoras-router.vercel.app).
+[site](https://router.hoplight.ai).
 
 ## Quickstart
 
@@ -137,7 +137,7 @@ tools in [docs/PRIOR-ART.md](docs/PRIOR-ART.md) runs: it sends a GET and grades 
 the one form the repo's `verify` column names: a commit echo in a JSON field or a response header
 (neither can pass on stale bytes), a served string (best-effort, and its verdict says so), an npm
 script, or `none`. A skip is never a pass.
-**[Every gate, and what each one refuses](https://pandoras-router.vercel.app/gates.html)**; the full
+**[Every gate, and what each one refuses](https://router.hoplight.ai/gates.html)**; the full
 matrix is [`docs/gates.json`](docs/gates.json), held to the code by `test/gate-matrix-test.mjs`, and
 [`docs/LIVENESS.md`](docs/LIVENESS.md) covers 401s, redirects, CDN caches and the 1 MB body cap.
 
@@ -177,7 +177,7 @@ than a ledger. Of the three entries written up in [docs/PRIOR-ART.md](docs/PRIOR
 both scope-before-dispatch and verify-after, and none checked that a merged change is actually live
 at a URL. That gap, rather than either half on its own, is what this fills. Three is what's written
 down and shown; it isn't a survey, and a fourth entry that does both halves would be worth a row.
-The side-by-side is on the [site](https://pandoras-router.vercel.app).
+The side-by-side is on the [site](https://router.hoplight.ai).
 
 ## Install
 

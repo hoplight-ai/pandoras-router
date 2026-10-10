@@ -19,6 +19,16 @@
 // (or copy) of this Node binary in a temp directory, with npm_execpath unset and, on POSIX, a PATH
 // holding no npm (a symlink to git beside it keeps the repository readable).
 //
+// A NODE THAT CANNOT START THERE (ROUTERFLAKE1, 2026-10-09). A Node whose runtime lives in a shared
+// library (Homebrew's macOS build loads `@rpath/libnode.N.dylib` from `@loader_path/../lib`) could
+// not always find it from the temp directory, so the copy was aborted by the system loader before
+// the close ran and this suite went red (two runs in five on one day, one in ten on another), with
+// no fault in the code. On POSIX the link now sits in a `bin/` with a `lib/` beside it that holds
+// links to the real binary's own shared libraries and nothing else (no node_modules, so still no
+// npm). If the loader still cannot start it, machine-fault.mjs retries that one step once, on that
+// exact failure only, and a second identical failure is printed as a SKIP with its reason. A skip
+// is never a pass.
+//
 // Nothing here touches a real repository or the network. Every workspace lives in the OS temp
 // directory and is removed afterwards.
 
@@ -29,6 +39,7 @@ import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
+import { retryOnMachineFault } from './machine-fault.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.join(HERE, '..');
@@ -122,13 +133,35 @@ function fakeNpm(w, body) {
   w.npm = script;
 }
 
+/** A shared library's file name: `libnode.141.dylib`, `libnode.so.127`. Never a directory such as node_modules. */
+const SHARED_LIB = /^lib[^/\\]*\.(dylib|so(\.\d+)*)$/;
+
 /**
- * A Node binary with no npm beside it: a hard link to this one in `dir`, or a copy when the link
- * cannot be made (another volume). Returns its path.
+ * A Node binary with no npm beside it: a hard link to this one, or a copy when the link cannot be
+ * made (another volume). Returns its path.
+ *
+ * Windows: `dir/node.exe`. POSIX: `dir/bin/node`, with `dir/lib/` holding a link to each shared
+ * library that sits in `../lib` beside the real binary, and nothing else. A Node built around a
+ * shared runtime looks for it at `../lib` from wherever the binary is (Homebrew's macOS build:
+ * `@rpath/libnode.N.dylib`, rpath `@loader_path/../lib`); without those links the system loader
+ * can abort the copy before the close runs. npm is looked for at `../lib/node_modules`, which is
+ * never linked, so npm stays absent. A static Node has no such library and gets no `lib/` at all.
  */
 function lonelyNode(dir) {
-  const target = path.join(dir, path.basename(process.execPath));
+  const binDir = WIN ? dir : path.join(dir, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  const target = path.join(binDir, path.basename(process.execPath));
   try { fs.linkSync(process.execPath, target); } catch { fs.copyFileSync(process.execPath, target); }
+  if (!WIN) {
+    const realLib = path.join(path.dirname(real(process.execPath)), '..', 'lib');
+    /** @type {string[]} */
+    let libs = [];
+    try { libs = fs.readdirSync(realLib).filter((f) => SHARED_LIB.test(f) && fs.statSync(path.join(realLib, f)).isFile()); } catch { /* no lib directory: nothing to link */ }
+    if (libs.length) {
+      fs.mkdirSync(path.join(dir, 'lib'));
+      for (const f of libs) fs.symlinkSync(path.join(realLib, f), path.join(dir, 'lib', f));
+    }
+  }
   return target;
 }
 
@@ -164,10 +197,10 @@ function close(w, { env = {}, killAfterMs = 60_000, node = process.execPath } = 
     child.stdout.on('data', (d) => { stdout += d; });
     child.stderr.on('data', (d) => { stderr += d; });
     const killer = setTimeout(() => { killed = true; child.kill('SIGKILL'); }, killAfterMs);
-    child.on('close', (status) => {
+    child.on('close', (status, signal) => {
       clearTimeout(killer);
       const m = /^\s+green\s+(\S+)\s+(.*)$/m.exec(stdout);
-      resolve({ status, stdout, stderr, killed, ms: Date.now() - started, green: m ? { value: m[1], note: m[2] } : null });
+      resolve({ status, signal, stdout, stderr, killed, ms: Date.now() - started, green: m ? { value: m[1], note: m[2] } : null });
     });
   });
 }
@@ -276,10 +309,14 @@ T('RED-PROOF 1 MB of output: the close prints only the capped tail, ending at th
 });
 
 T('RED-PROOF no npm anywhere: the gate records skip with the reason, never yes and never no', async () => {
+  /** @type {string|null} */
+  let skipped = null;
   await withWorkspace({}, async (w) => {
     const nodeDir = path.join(w.ws, 'lonely-node');
     fs.mkdirSync(nodeDir);
     const node = lonelyNode(nodeDir);
+    const besideNode = WIN ? path.join(path.dirname(node), 'node_modules') : path.join(path.dirname(node), '..', 'lib', 'node_modules');
+    assert.ok(!fs.existsSync(besideNode), `premise: no npm beside the lonely Node, but ${besideNode} exists`);
     /** @type {Record<string, string|undefined>} */
     const env = {};
     if (!WIN) {
@@ -288,12 +325,17 @@ T('RED-PROOF no npm anywhere: the gate records skip with the reason, never yes a
       fs.symlinkSync(REAL_GIT, path.join(w.bin, 'git'));
       env.PATH = pathFor(w.bin);
     }
-    const green = greenOf(await close(w, { node, env }));
+    // The one step that may be retried: only on the system loader's missing-library abort, once.
+    const run = await retryOnMachineFault(() => close(w, { node, env }));
+    if (run.retried) console.log(`  no npm anywhere: the system loader could not find ${run.retried} for the copied Node; retried once, ${run.skip ? 'and it failed the same way again' : 'and the second try ran'}`);
+    if (run.skip) { skipped = run.skip; return; }
+    const green = greenOf(run.result);
     assert.equal(green.value, 'skip', green.note);
     assert.match(green.note, /npm/);
     assert.match(green.note, /not found|ENOENT/i, 'the skip does not say npm was not found');
     if (WIN) assert.ok(green.note.includes(path.join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js')), `the skip does not name the path tried beside Node: ${green.note}`);
   });
+  return skipped ? { skip: skipped } : undefined;
 });
 
 // ---------------------------------------------------------------- the fresh-base rule
@@ -781,11 +823,19 @@ T(`RED-PROOF runBuild: a declared command that never exits is killed at the disp
 
 let pass = 0;
 const fails = [];
+// A test that returns `{ skip }` measured nothing (see machine-fault.mjs). It is counted apart and
+// printed with its reason, never added to the passes, so the pass count reads short of the total.
+const skips = [];
 for (const t of tests) {
-  try { await t.fn(); pass++; } catch (e) { fails.push({ name: t.name, message: e.message }); }
+  try {
+    const out = await t.fn();
+    if (out && typeof out === 'object' && typeof out.skip === 'string') skips.push({ name: t.name, reason: out.skip });
+    else pass++;
+  } catch (e) { fails.push({ name: t.name, message: e.message }); }
 }
 for (const f of fails) console.log(`FAIL  ${f.name}\n      ${String(f.message).split('\n')[0]}`);
+for (const s of skips) console.log(`SKIP  ${s.name}\n      ${s.reason}`);
 const red = tests.filter((t) => t.name.startsWith('RED-PROOF')).length;
-console.log(`BUILD GATE ASSERTIONS  ${pass}/${tests.length} pass, ${fails.length} fail (on ${process.platform})`);
+console.log(`BUILD GATE ASSERTIONS  ${pass}/${tests.length} pass, ${fails.length} fail${skips.length ? `, ${skips.length} skipped (a skip is not a pass)` : ''} (on ${process.platform})`);
 console.log(`  ${red} of them are RED-PROOF: each asserts a no, a skip or a refused limit that a weaker gate would read as a pass or never return; the first eight run the real close driver against a fake npm.`);
 if (fails.length) throw new Error(`build-gate-test.mjs: ${fails.length}/${tests.length} assertion(s) failed.`);
